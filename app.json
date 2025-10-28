@@ -1,0 +1,42 @@
+{
+  "expo": {
+    "name": "G.U.R.U",
+    "slug": "guru-pos",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#6B46C1"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.guru.pos",
+      "infoPlist": {
+        "NSCameraUsageDescription": "This app uses the camera to scan barcodes for quick item entry.",
+        "NSPhotoLibraryUsageDescription": "This app needs access to save receipts to your photo library."
+      }
+    },
+    "android": {
+      "package": "com.guru.pos",
+      "permissions": [
+        "CAMERA",
+        "WRITE_EXTERNAL_STORAGE",
+        "READ_EXTERNAL_STORAGE"
+      ]
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow $(PRODUCT_NAME) to access camera to scan barcodes."
+        }
+      ]
+    ]
+  }
+}
