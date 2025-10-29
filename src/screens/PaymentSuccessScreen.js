@@ -48,6 +48,12 @@ export default function PaymentSuccessScreen({route, navigation}) {
           onPress={() => navigation.goBack()}>
           <Text style={styles.viewReceiptButtonText}>View Receipt</Text>
         </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.doneButton}
+          onPress={() => navigation.navigate('Counter')}>
+          <Text style={styles.doneButtonText}>Done</Text>
+        </TouchableOpacity>
       </View>
     </View>
   );
@@ -154,6 +160,24 @@ const styles = StyleSheet.create({
   },
   viewReceiptButtonText: {
     color: '#6B46C1',
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  doneButton: {
+    backgroundColor: '#4CAF50',
+    padding: 18,
+    borderRadius: 12,
+    width: '100%',
+    alignItems: 'center',
+    marginTop: 12,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: {width: 0, height: 2},
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+  },
+  doneButtonText: {
+    color: '#FFFFFF',
     fontSize: 18,
     fontWeight: 'bold',
   },

@@ -13,6 +13,7 @@ import {formatCurrency} from '../utils/formatters';
 import {generatePDF} from '../services/exportService';
 import {syncTransactionsToCloud} from '../services/cloudSyncService';
 import {database} from '../db';
+import {Ionicons} from '@expo/vector-icons';
 
 export default function CounterScreen({navigation}) {
   const {cartLines, updateQuantity, updateLineDiscount, clearCart, getTotals, removeFromCart} =
@@ -27,120 +28,21 @@ export default function CounterScreen({navigation}) {
     parseFloat(otherCharges) || 0,
   );
 
-  const handleCharge = async () => {
+  const handleCharge = () => {
     if (cartLines.length === 0) {
       Alert.alert('Error', 'Cart is empty');
       return;
     }
 
-    try {
-      let transactionId;
-      let savedLines;
-
-      await database.write(async () => {
-        const transactionsCollection = database.collections.get('transactions');
-        const transactionLinesCollection = database.collections.get('transaction_lines');
-        const settingsCollection = database.collections.get('settings');
-
-        // Create transaction
-        const transaction = await transactionsCollection.create(txn => {
-          txn.date = new Date().toISOString();
-          txn.subtotal = totals.subtotal;
-          txn.tax = totals.tax;
-          txn.discount = totals.discount;
-          txn.otherCharges = totals.otherCharges;
-          txn.grandTotal = totals.grandTotal;
-          txn.itemCount = totals.itemCount;
-          txn.unitCount = totals.unitCount;
-          txn.status = 'completed';
-        });
-
-        transactionId = transaction.id;
-
-        // Create transaction lines
-        savedLines = await Promise.all(
-          cartLines.map(line =>
-            transactionLinesCollection.create(txnLine => {
-              txnLine.transactionId = transaction.id;
-              txnLine.itemId = line.itemId;
-              txnLine.itemName = line.itemName;
-              txnLine.quantity = line.quantity;
-              txnLine.unitPrice = line.unitPrice;
-              txnLine.perLineDiscount = line.perLineDiscount;
-              txnLine.lineTotal = line.lineTotal;
-            }),
-          ),
-        );
-
-        // Get shop info for receipt
-        const settings = await settingsCollection.query().fetch();
-        const shopName = settings.find(s => s.key === 'shopName')?.value || 'G.U.R.U Store';
-        const ownerName = settings.find(s => s.key === 'ownerName')?.value || '';
-        const location = settings.find(s => s.key === 'location')?.value || '';
-      });
-
-      // Generate PDF outside the write block
-      try {
-        const pdfResult = await generatePDF(
-          {
-            id: transactionId,
-            date: new Date().toISOString(),
-            subtotal: totals.subtotal,
-            tax: totals.tax,
-            discount: totals.discount,
-            otherCharges: totals.otherCharges,
-            grandTotal: totals.grandTotal,
-            itemCount: totals.itemCount,
-            unitCount: totals.unitCount,
-          },
-          savedLines.map(l => ({
-            itemName: l.itemName,
-            quantity: l.quantity,
-            unitPrice: l.unitPrice,
-            perLineDiscount: l.perLineDiscount,
-            lineTotal: l.lineTotal,
-          })),
-          {shopName, ownerName, location},
-        );
-
-        // Update transaction with receipt path
-        if (pdfResult.success && transactionId) {
-          await database.write(async () => {
-            const transactionsCollection = database.collections.get('transactions');
-            const txn = await transactionsCollection.find(transactionId);
-            await txn.update(t => {
-              t.receiptFilePath = pdfResult.path;
-            });
-          });
-        }
-      } catch (pdfError) {
-        console.log('PDF generation skipped:', pdfError.message);
-      }
-
-      // Clear cart
-      clearCart();
-      setTaxPercent('0');
-      setDiscount('0');
-      setOtherCharges('0');
-
-      // Sync transaction to cloud in background
-      syncTransactionsToCloud().catch(err => console.log('Sync skipped:', err));
-      
-      // Navigate to receipt preview
-      Alert.alert(
-        'Success!',
-        `Transaction completed!\nReceipt saved to device.`,
-        [
-          {
-            text: 'OK',
-            onPress: () => navigation.navigate('Today'),
-          },
-        ],
-      );
-    } catch (error) {
-      console.error('Transaction error:', error);
-      Alert.alert('Error', 'Failed to complete transaction');
-    }
+    // Navigate to PaymentModeScreen instead of directly processing payment
+    navigation.navigate('PaymentMode', {
+      cartTotal: totals.grandTotal,
+      cartLines: cartLines,
+      totals: totals,
+      taxPercent: parseFloat(taxPercent) || 0,
+      discount: parseFloat(discount) || 0,
+      otherCharges: parseFloat(otherCharges) || 0,
+    });
   };
 
   const handleSaveForLater = async () => {
@@ -213,11 +115,12 @@ export default function CounterScreen({navigation}) {
           <Text style={styles.title}>Counter</Text>
         </View>
         <View style={styles.emptyContainer}>
-          <Text style={styles.emptyText}>🛒👨‍💼</Text>
-          <Text style={styles.emptyMessage}>Couner is free</Text>
+          <Ionicons name="cart-outline" size={64} color="#6B46C1" />
+          <Text style={styles.emptyMessage}>Counter is free</Text>
           <TouchableOpacity
             style={styles.backButton}
             onPress={() => navigation.navigate('Today')}>
+            <Ionicons name="add-circle" size={20} color="#FFFFFF" style={{marginRight: 8}} />
             <Text style={styles.backButtonText}>Create a New Sale</Text>
           </TouchableOpacity>
         </View>
@@ -229,10 +132,11 @@ export default function CounterScreen({navigation}) {
     <View style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backArrow}>
-          <Text style={styles.backArrowText}>←</Text>
+          <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
         </TouchableOpacity>
         <Text style={styles.title}>G.U.R.U</Text>
-        <TouchableOpacity onPress={handleClear}>
+        <TouchableOpacity onPress={handleClear} style={styles.clearButton}>
+          <Ionicons name="trash-outline" size={20} color="#FFFFFF" />
           <Text style={styles.clearText}>CLEAR</Text>
         </TouchableOpacity>
       </View>
@@ -243,7 +147,7 @@ export default function CounterScreen({navigation}) {
             <View style={styles.lineHeader}>
               <Text style={styles.itemName}>{line.itemName}</Text>
               <TouchableOpacity onPress={() => removeFromCart(line.itemId)}>
-                <Text style={styles.removeText}>✕</Text>
+                <Ionicons name="close-circle" size={24} color="#FF3B30" />
               </TouchableOpacity>
             </View>
 
@@ -252,7 +156,7 @@ export default function CounterScreen({navigation}) {
                 <TouchableOpacity
                   style={styles.qtyButton}
                   onPress={() => updateQuantity(line.itemId, line.quantity - 1)}>
-                  <Text style={styles.qtyButtonText}>−</Text>
+                  <Ionicons name="remove" size={20} color="#6B46C1" />
                 </TouchableOpacity>
                 <TextInput
                   style={styles.qtyInput}
@@ -263,7 +167,7 @@ export default function CounterScreen({navigation}) {
                 <TouchableOpacity
                   style={styles.qtyButton}
                   onPress={() => updateQuantity(line.itemId, line.quantity + 1)}>
-                  <Text style={styles.qtyButtonText}>+</Text>
+                  <Ionicons name="add" size={20} color="#6B46C1" />
                 </TouchableOpacity>
               </View>
 
@@ -373,10 +277,10 @@ const styles = StyleSheet.create({
   backArrow: {
     padding: 4,
   },
-  backArrowText: {
-    fontSize: 28,
-    color: '#FFFFFF',
-    fontWeight: 'bold',
+  clearButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 4,
   },
   title: {
     fontSize: 24,
@@ -390,6 +294,7 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '600',
+    marginLeft: 4,
   },
   emptyContainer: {
     flex: 1,
@@ -410,6 +315,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 32,
     paddingVertical: 16,
     borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   backButtonText: {
     color: '#FFFFFF',

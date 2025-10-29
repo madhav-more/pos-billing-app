@@ -2,6 +2,7 @@ import React, {useState, useEffect} from 'react';
 import {View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Alert} from 'react-native';
 import {database} from '../db';
 import {formatCurrency} from '../utils/formatters';
+import {Ionicons} from '@expo/vector-icons';
 
 export default function ReportsScreen() {
   const [todaySales, setTodaySales] = useState([]);
@@ -121,13 +122,31 @@ export default function ReportsScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>Today's Reports</Text>
+        <View style={styles.headerContent}>
+          <Ionicons name="analytics-outline" size={28} color="#FFFFFF" />
+          <Text style={styles.title}>Today's Reports</Text>
+        </View>
+        <TouchableOpacity style={styles.refreshButton} onPress={onRefresh}>
+          <Ionicons name="refresh" size={24} color="#FFFFFF" />
+        </TouchableOpacity>
       </View>
 
       <View style={styles.summaryCard}>
-        <Text style={styles.summaryLabel}>Today's Total Sales</Text>
+        <View style={styles.summaryHeader}>
+          <Ionicons name="trending-up" size={24} color="#FFFFFF" />
+          <Text style={styles.summaryLabel}>Today's Total Sales</Text>
+        </View>
         <Text style={styles.summaryAmount}>{formatCurrency(todayTotal)}</Text>
-        <Text style={styles.summarySubtext}>{todaySales.length} transactions</Text>
+        <View style={styles.summaryStats}>
+          <View style={styles.statItem}>
+            <Ionicons name="receipt" size={16} color="rgba(255,255,255,0.8)" />
+            <Text style={styles.statText}>{todaySales.length} transactions</Text>
+          </View>
+          <View style={styles.statItem}>
+            <Ionicons name="time" size={16} color="rgba(255,255,255,0.8)" />
+            <Text style={styles.statText}>Last updated: {new Date().toLocaleTimeString()}</Text>
+          </View>
+        </View>
       </View>
 
       {isLoading ? (
@@ -136,7 +155,7 @@ export default function ReportsScreen() {
         </View>
       ) : todaySales.length === 0 ? (
         <View style={styles.emptyContainer}>
-          <Text style={styles.emptyIcon}>📊</Text>
+          <Ionicons name="analytics-outline" size={64} color="#999" />
           <Text style={styles.emptyText}>No sales today</Text>
           <Text style={styles.emptySubtext}>Sales will appear here as you make them</Text>
         </View>
@@ -164,11 +183,22 @@ const styles = StyleSheet.create({
     backgroundColor: '#6B46C1',
     padding: 16,
     paddingTop: 48,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  headerContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   title: {
     fontSize: 24,
     fontWeight: 'bold',
     color: '#FFFFFF',
+    marginLeft: 10,
+  },
+  refreshButton: {
+    padding: 8,
   },
   summaryCard: {
     backgroundColor: '#6B46C1',
@@ -177,20 +207,35 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     alignItems: 'center',
   },
+  summaryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
   summaryLabel: {
     fontSize: 14,
     color: 'rgba(255,255,255,0.8)',
-    marginBottom: 8,
+    marginLeft: 8,
   },
   summaryAmount: {
     fontSize: 42,
     fontWeight: 'bold',
     color: '#FFFFFF',
-    marginBottom: 4,
+    marginBottom: 16,
   },
-  summarySubtext: {
-    fontSize: 14,
+  summaryStats: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    width: '100%',
+  },
+  statItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  statText: {
+    fontSize: 12,
     color: 'rgba(255,255,255,0.9)',
+    marginLeft: 4,
   },
   listContainer: {
     padding: 16,

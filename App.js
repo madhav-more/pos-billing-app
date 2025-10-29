@@ -8,17 +8,21 @@ import {database} from './src/db';
 import {seedDatabase} from './src/db/seed-script';
 import {CartProvider} from './src/context/CartContext';
 import {autoSync} from './src/services/cloudSyncService';
+import jwtAuthService from './src/services/jwtAuthService';
 
 // Screens
 import SplashScreen from './src/screens/SplashScreen';
 import OnboardingScreen from './src/screens/OnboardingScreen';
+import LoginScreen from './src/screens/LoginScreen';
+import SignupScreen from './src/screens/SignupScreen';
 import HomeScreen from './src/screens/HomeScreen';
-import ScannerScreen from './src/screens/ScannerScreen';
+import ScannerScreen from './src/screens/ImprovedScannerScreen';
 import CounterScreen from './src/screens/CounterScreen';
 import ItemsScreen from './src/screens/ItemsScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import ReportsScreen from './src/screens/ReportsScreen';
 import PaymentSuccessScreen from './src/screens/PaymentSuccessScreen';
+import PaymentModeScreen from './src/screens/PaymentModeScreen';
 import SelectItemScreen from './src/screens/SelectItemScreen';
 
 const Stack = createStackNavigator();
@@ -46,6 +50,8 @@ function MainTabs({onLogout}) {
 function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [isOnboarded, setIsOnboarded] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [user, setUser] = useState(null);
   const [forceRefresh, setForceRefresh] = useState(0);
 
   useEffect(() => {
@@ -54,6 +60,11 @@ function App() {
 
   const initializeApp = async () => {
     try {
+      // Initialize authentication
+      const authState = await jwtAuthService.initialize();
+      setIsAuthenticated(authState.isAuthenticated);
+      setUser(authState.user);
+      
       const settingsCollection = database.collections.get('settings');
       const itemsCollection = database.collections.get('items');
       
@@ -76,7 +87,9 @@ function App() {
       }
 
       // Auto-sync with cloud if authenticated
-      autoSync().catch(err => console.error('Auto-sync failed:', err));
+      if (authState.isAuthenticated) {
+        autoSync().catch(err => console.error('Auto-sync failed:', err));
+      }
       
       setTimeout(() => setIsLoading(false), 1000);
     } catch (error) {
@@ -113,6 +126,11 @@ function App() {
               <Stack.Screen name="Onboarding">
                 {props => <OnboardingScreen {...props} onComplete={checkOnboardingStatus} />}
               </Stack.Screen>
+            ) : !isAuthenticated ? (
+              <>
+                <Stack.Screen name="Login" component={LoginScreen} />
+                <Stack.Screen name="Signup" component={SignupScreen} />
+              </>
             ) : (
               <>
                 <Stack.Screen name="MainTabs">
@@ -122,6 +140,11 @@ function App() {
                   name="Scanner"
                   component={ScannerScreen}
                   options={{presentation: 'modal'}}
+                />
+                <Stack.Screen
+                  name="PaymentMode"
+                  component={PaymentModeScreen}
+                  options={{headerShown: false}}
                 />
                 <Stack.Screen
                   name="PaymentSuccess"

@@ -1,7 +1,7 @@
 import {appSchema, tableSchema} from '@nozbe/watermelondb';
 
 export default appSchema({
-  version: 1,
+  version: 3, // Incremented for sync fields
   tables: [
     tableSchema({
       name: 'items',
@@ -15,6 +15,22 @@ export default appSchema({
         {name: 'category', type: 'string', isOptional: true},
         {name: 'recommended', type: 'boolean'},
         {name: 'default_quantity', type: 'number'},
+        {name: 'inventory_qty', type: 'number', isOptional: true},
+        {name: 'is_synced', type: 'boolean', isOptional: true},
+        {name: 'synced_at', type: 'string', isOptional: true},
+        {name: 'created_at', type: 'number'},
+        {name: 'updated_at', type: 'number'},
+      ],
+    }),
+    tableSchema({
+      name: 'customers',
+      columns: [
+        {name: 'name', type: 'string'},
+        {name: 'phone', type: 'string', isOptional: true},
+        {name: 'email', type: 'string', isOptional: true},
+        {name: 'address', type: 'string', isOptional: true},
+        {name: 'is_synced', type: 'boolean', isOptional: true},
+        {name: 'synced_at', type: 'string', isOptional: true},
         {name: 'created_at', type: 'number'},
         {name: 'updated_at', type: 'number'},
       ],
@@ -22,6 +38,7 @@ export default appSchema({
     tableSchema({
       name: 'transactions',
       columns: [
+        {name: 'customer_id', type: 'string', isOptional: true},
         {name: 'date', type: 'string'},
         {name: 'subtotal', type: 'number'},
         {name: 'tax', type: 'number'},
@@ -30,8 +47,11 @@ export default appSchema({
         {name: 'grand_total', type: 'number'},
         {name: 'item_count', type: 'number'},
         {name: 'unit_count', type: 'number'},
+        {name: 'payment_type', type: 'string', isOptional: true},
         {name: 'status', type: 'string'},
         {name: 'receipt_file_path', type: 'string', isOptional: true},
+        {name: 'is_synced', type: 'boolean', isOptional: true},
+        {name: 'synced_at', type: 'string', isOptional: true},
         {name: 'created_at', type: 'number'},
         {name: 'updated_at', type: 'number'},
       ],

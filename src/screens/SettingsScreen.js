@@ -1,7 +1,7 @@
 import React, {useState, useEffect} from 'react';
 import {View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert} from 'react-native';
 import {database} from '../db';
-import {signOut, getCurrentUser} from '../services/supabaseAuthService';
+import jwtAuthService from '../services/jwtAuthService';
 
 export default function SettingsScreen({navigation, onLogout}) {
   const [userInfo, setUserInfo] = useState({
@@ -18,14 +18,15 @@ export default function SettingsScreen({navigation, onLogout}) {
 
   const loadUserInfo = async () => {
     try {
+      const currentUser = jwtAuthService.getCurrentUser();
       const settingsCollection = database.collections.get('settings');
       const settings = await settingsCollection.query().fetch();
 
-      const name = settings.find(s => s.key === 'ownerName')?.value || 'User';
-      const email = settings.find(s => s.key === 'userEmail')?.value || '';
+      const name = currentUser?.name || settings.find(s => s.key === 'ownerName')?.value || 'User';
+      const email = currentUser?.email || settings.find(s => s.key === 'userEmail')?.value || '';
       const shopName = settings.find(s => s.key === 'shopName')?.value || 'G.U.R.U Store';
       const location = settings.find(s => s.key === 'location')?.value || '';
-      const authMode = settings.find(s => s.key === 'authMode')?.value || 'local';
+      const authMode = jwtAuthService.isAuthenticated() ? 'cloud' : 'local';
 
       setUserInfo({name, email, shopName, location, authMode});
     } catch (error) {
@@ -45,7 +46,7 @@ export default function SettingsScreen({navigation, onLogout}) {
           onPress: async () => {
             try {
               if (userInfo.authMode === 'cloud') {
-                await signOut();
+                await jwtAuthService.signOut();
               }
               
               // Mark as logged out but keep data

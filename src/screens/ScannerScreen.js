@@ -9,7 +9,7 @@ import {
   Modal,
   TextInput,
   ScrollView,
-  Animated,
+  Dimensions,
 } from 'react-native';
 import {CameraView, useCameraPermissions} from 'expo-camera';
 import {database} from '../db';
@@ -17,6 +17,9 @@ import {Q} from '@nozbe/watermelondb';
 import {useCart} from '../context/CartContext';
 import {formatCurrency} from '../utils/formatters';
 import {syncItemsToCloud} from '../services/cloudSyncService';
+import {Ionicons} from '@expo/vector-icons';
+
+const {width, height} = Dimensions.get('window');
 
 export default function ScannerScreen({navigation}) {
   const [permission, requestPermission] = useCameraPermissions();
@@ -25,28 +28,18 @@ export default function ScannerScreen({navigation}) {
   const [showManualEntry, setShowManualEntry] = useState(false);
   const [manualBarcode, setManualBarcode] = useState('');
   const [newItemData, setNewItemData] = useState({name: '', price: '', unit: 'pcs'});
-  const {addToCart} = useCart();
+  const {addToCart, updateQuantity} = useCart();
   
-  // Animated scanning line
-  const scanLineAnim = useRef(new Animated.Value(0)).current;
+  // Debounce timer
+  const debounceTimer = useRef(null);
+  const lastScannedCode = useRef('');
 
   useEffect(() => {
-    // Animate scanning line continuously
-    const animate = () => {
-      Animated.sequence([
-        Animated.timing(scanLineAnim, {
-          toValue: 1,
-          duration: 2000,
-          useNativeDriver: true,
-        }),
-        Animated.timing(scanLineAnim, {
-          toValue: 0,
-          duration: 2000,
-          useNativeDriver: true,
-        }),
-      ]).start(() => animate());
+    return () => {
+      if (debounceTimer.current) {
+        clearTimeout(debounceTimer.current);
+      }
     };
-    animate();
   }, []);
 
   const findItemByBarcode = async barcode => {
@@ -63,36 +56,51 @@ export default function ScannerScreen({navigation}) {
   };
 
   const handleBarCodeScanned = async ({type, data}) => {
-    // Trim whitespace from barcode
     const trimmedBarcode = data.trim();
-    console.log('📷 Barcode Scanned:', {type, original: data, trimmed: trimmedBarcode});
-    setScanned(true);
-
-    const item = await findItemByBarcode(trimmedBarcode);
-    console.log('🔍 Database lookup result:', item ? 'Found' : 'Not found');
-
-    if (item) {
-      // Add to scan queue
-      setScanQueue(prev => {
-        const existing = prev.find(q => q.itemId === item.id);
-        if (existing) {
-          return prev.map(q =>
-            q.itemId === item.id ? {...q, count: q.count + 1} : q,
-          );
-        }
-        return [...prev, {itemId: item.id, itemName: item.name, count: 1, item}];
-      });
-
-      // Auto add to cart
-      addToCart(item, 1);
-
-      // Reset scanner after 500ms
-      setTimeout(() => setScanned(false), 500);
-    } else {
-      // Unknown barcode - show manual entry
-      setManualBarcode(trimmedBarcode);
-      setShowManualEntry(true);
+    
+    // Debounce: ignore if same code scanned within 2 seconds
+    if (trimmedBarcode === lastScannedCode.current) {
+      console.log('⏱️ Debounce: ignoring duplicate scan');
+      return;
     }
+
+    // Clear previous debounce timer
+    if (debounceTimer.current) {
+      clearTimeout(debounceTimer.current);
+    }
+
+    // Set debounce timer
+    debounceTimer.current = setTimeout(async () => {
+      console.log('📷 Barcode Scanned:', {type, barcode: trimmedBarcode});
+      lastScannedCode.current = trimmedBarcode;
+      setScanned(true);
+
+      const item = await findItemByBarcode(trimmedBarcode);
+      console.log('🔍 Database lookup result:', item ? 'Found' : 'Not found');
+
+      if (item) {
+        // Auto-add to cart
+        addToCart(item, 1);
+
+        // Update scan queue
+        setScanQueue(prev => {
+          const existing = prev.find(q => q.itemId === item.id);
+          if (existing) {
+            return prev.map(q =>
+              q.itemId === item.id ? {...q, count: q.count + 1} : q,
+            );
+          }
+          return [...prev, {itemId: item.id, itemName: item.name, count: 1, item}];
+        });
+
+        // Reset scanner after 1 second
+        setTimeout(() => setScanned(false), 1000);
+      } else {
+        // Unknown barcode - show manual entry
+        setManualBarcode(trimmedBarcode);
+        setShowManualEntry(true);
+      }
+    }, 2000); // 2 second debounce
   };
 
   const handleManualAdd = async () => {
@@ -152,6 +160,21 @@ export default function ScannerScreen({navigation}) {
     }
   };
 
+  const updateScanQueueQuantity = (itemId, newQuantity) => {
+    if (newQuantity <= 0) {
+      setScanQueue(prev => prev.filter(q => q.itemId !== itemId));
+    } else {
+      setScanQueue(prev =>
+        prev.map(q =>
+          q.itemId === itemId ? {...q, count: newQuantity} : q,
+        ),
+      );
+    }
+    
+    // Update cart
+    updateQuantity(itemId, newQuantity);
+  };
+
   const goToCounter = () => {
     navigation.navigate('Counter');
   };
@@ -163,17 +186,16 @@ export default function ScannerScreen({navigation}) {
   if (!permission.granted) {
     return (
       <View style={styles.container}>
-        <Text style={styles.whiteText}>Camera permission denied</Text>
-        <TouchableOpacity
-          style={styles.primaryButton}
-          onPress={requestPermission}>
-          <Text style={styles.buttonText}>Grant Permission</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.manualButton}
-          onPress={() => setShowManualEntry(true)}>
-          <Text style={styles.buttonText}>Enter Barcode Manually</Text>
-        </TouchableOpacity>
+        <View style={styles.permissionContainer}>
+          <Ionicons name="camera-outline" size={80} color="#6B46C1" />
+          <Text style={styles.permissionTitle}>Camera Permission Required</Text>
+          <Text style={styles.permissionText}>
+            We need camera access to scan barcodes
+          </Text>
+          <TouchableOpacity style={styles.permissionButton} onPress={requestPermission}>
+            <Text style={styles.permissionButtonText}>Grant Permission</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     );
   }
