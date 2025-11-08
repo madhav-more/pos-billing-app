@@ -13,7 +13,7 @@ import {
 import {Ionicons} from '@expo/vector-icons';
 import jwtAuthService from '../services/jwtAuthService';
 
-export default function SignupScreen({navigation}) {
+export default function SignupScreen({navigation, onSignupSuccess}) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -43,10 +43,12 @@ export default function SignupScreen({navigation}) {
       const result = await jwtAuthService.signUp(email, password, name);
       
       if (result.success) {
-        Alert.alert('Success', 'Account created successfully!', [
-          {text: 'OK', onPress: () => console.log('Signup successful')}
-        ]);
-      } else {
+        console.log('✅ Signup successful - auth saved to storage');
+        // Call the callback to trigger navigation immediately
+        if (onSignupSuccess) {
+          onSignupSuccess();
+        }
+      } else{
         Alert.alert('Signup Failed', result.error);
       }
     } catch (error) {

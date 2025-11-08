@@ -1,5 +1,92 @@
 import Customer from '../models/Customer.js';
 
+/**
+ * Search customers with autosuggest functionality
+ */
+export const searchCustomers = async (req, res) => {
+  const { query, limit = 10, searchFields = ['name', 'phone', 'email'] } = req.body;
+  const userId = req.user.userId;
+
+  if (!query || typeof query !== 'string') {
+    return res.status(400).json({ error: 'Query parameter is required' });
+  }
+
+  try {
+    // Build search conditions
+    const searchTerms = query.toLowerCase().split(' ').filter(term => term.length > 0);
+    
+    if (searchTerms.length === 0) {
+      return res.json({ customers: [] });
+    }
+
+    // Create regex patterns for each search term
+    const regexPatterns = searchTerms.map(term => new RegExp(term, 'i'));
+
+    // Build MongoDB query
+    const conditions = {
+      user_id: userId,
+      $or: searchFields.map(field => ({
+        [field]: { $in: regexPatterns }
+      }))
+    };
+
+    // Execute search with relevance scoring
+    const customers = await Customer.find(conditions).limit(limit * 2); // Get more to allow for scoring
+
+    // Calculate relevance scores and sort
+    const scoredCustomers = customers.map(customer => {
+      const score = calculateRelevanceScore(customer, query, searchFields);
+      return { ...customer.toObject(), relevanceScore: score };
+    });
+
+    // Sort by relevance score and take top results
+    const sortedCustomers = scoredCustomers
+      .sort((a, b) => b.relevanceScore - a.relevanceScore)
+      .slice(0, limit);
+
+    res.json({ 
+      customers: sortedCustomers,
+      total: sortedCustomers.length,
+      query: query
+    });
+
+  } catch (error) {
+    console.error('Search customers error:', error);
+    res.status(500).json({ error: 'Failed to search customers' });
+  }
+};
+
+/**
+ * Calculate relevance score for customer search
+ */
+const calculateRelevanceScore = (customer, query, searchFields) => {
+  let score = 0;
+  const queryLower = query.toLowerCase();
+  
+  searchFields.forEach(field => {
+    const value = customer[field] ? customer[field].toString().toLowerCase() : '';
+    
+    // Exact match gets highest score
+    if (value === queryLower) {
+      score += 100;
+    }
+    // Starts with query gets high score
+    else if (value.startsWith(queryLower)) {
+      score += 50;
+    }
+    // Contains query gets medium score
+    else if (value.includes(queryLower)) {
+      score += 25;
+    }
+    // Word-level match gets low score
+    else if (value.split(' ').some(word => word.startsWith(queryLower))) {
+      score += 10;
+    }
+  });
+
+  return score;
+};
+
 export const getCustomers = async (req, res) => {
   const { since } = req.query;
   const userId = req.user.userId;

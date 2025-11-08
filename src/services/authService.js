@@ -256,7 +256,12 @@ class AuthService {
 
       return { success: true, response };
     } catch (error) {
-      console.error('Authenticated request error:', error);
+      // Network error - likely backend is offline
+      if (error.message.includes('Network request failed') || 
+          error.message.includes('Failed to fetch') ||
+          error.message.includes('ECONNREFUSED')) {
+        return { success: false, error: 'Backend offline' };
+      }
       return { success: false, error: error.message };
     }
   }

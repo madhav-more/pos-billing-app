@@ -60,7 +60,7 @@ export async function syncItems() {
 
     const client = getSupabaseClient();
     const itemsData = unsyncedItems.map(item => ({
-      local_id: item.id,
+      id: item.id,
       name: item.name,
       category: item.category,
       unit: item.unit,

@@ -10,6 +10,8 @@ import {
   TextInput,
   ScrollView,
   Dimensions,
+  Animated,
+  Platform,
 } from 'react-native';
 import {CameraView, useCameraPermissions} from 'expo-camera';
 import {database} from '../db';
@@ -17,6 +19,17 @@ import {Q} from '@nozbe/watermelondb';
 import {useCart} from '../context/CartContext';
 import {formatCurrency} from '../utils/formatters';
 import {Ionicons} from '@expo/vector-icons';
+// optional haptics (wrapped to avoid crash on unsupported platforms)
+let Haptics;
+try {
+  // lazy require so it won't crash if module isn't installed
+  // If you don't have expo-haptics installed remove this block or install it.
+  // keep optional — failure to import will be caught and ignored
+  // eslint-disable-next-line global-require
+  Haptics = require('expo-haptics');
+} catch (e) {
+  Haptics = null;
+}
 
 const {width, height} = Dimensions.get('window');
 
@@ -27,18 +40,61 @@ export default function ImprovedScannerScreen({navigation}) {
   const [showManualEntry, setShowManualEntry] = useState(false);
   const [manualBarcode, setManualBarcode] = useState('');
   const [newItemData, setNewItemData] = useState({name: '', price: '', unit: 'pcs'});
+  const [cameraReady, setCameraReady] = useState(false);
   const {addToCart, updateQuantity} = useCart();
-  
-  // Debounce timer
-  const debounceTimer = useRef(null);
-  const lastScannedCode = useRef('');
+
+  // Debounce & cooldown timer refs
+  const debounceTimer = useRef(null);         // prevents events during debounce window
+  const lastScannedCode = useRef('');        // keep track of last scanned barcode
+  const cooldownTimer = useRef(null);        // for cooldown when re-enabling same barcode
+
+  // Pulsing animation for center guide
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+
+  // Flash animation for quick visual feedback on successful scan
+  const flashAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
+    // request permission immediately so camera can initialize faster
+    // Only request if we don't already have a response (keeps behavior safe)
+    if (!permission) {
+      requestPermission().catch(err => console.warn('Permission request failed', err));
+    } else if (!permission.granted) {
+      // if permission object exists but not granted, proactively request
+      requestPermission().catch(err => console.warn('Permission request failed', err));
+    }
+
+    // Start pulsing animation for the guide
+    const pulse = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 1.2,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    pulse.start();
+
     return () => {
+      pulse.stop();
+      // clear any timers on unmount
       if (debounceTimer.current) {
         clearTimeout(debounceTimer.current);
+        debounceTimer.current = null;
       }
+      if (cooldownTimer.current) {
+        clearTimeout(cooldownTimer.current);
+        cooldownTimer.current = null;
+      }
+      flashAnim.stopAnimation();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const findItemByBarcode = async (barcode) => {
@@ -54,52 +110,96 @@ export default function ImprovedScannerScreen({navigation}) {
     }
   };
 
+  // Small helper to flash screen briefly for visual feedback
+  const triggerFlashAndHaptics = () => {
+    // flash animation
+    Animated.sequence([
+      Animated.timing(flashAnim, {toValue: 0.35, duration: 60, useNativeDriver: true}),
+      Animated.timing(flashAnim, {toValue: 0, duration: 200, useNativeDriver: true}),
+    ]).start();
+    // haptic feedback (optional)
+    try {
+      if (Haptics && Haptics.impactAsync) {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      }
+    } catch (e) {
+      // ignore haptics failures
+    }
+  };
+
   const handleBarCodeScanned = async ({type, data}) => {
+    // If data is falsy, ignore
+    if (!data) return;
     const trimmedBarcode = data.trim();
-    
-    // Debounce: ignore if same code scanned within 2 seconds
-    if (trimmedBarcode === lastScannedCode.current) {
-      console.log('⏱️ Debounce: ignoring duplicate scan');
+
+    // If currently debouncing (global), ignore this event
+    if (debounceTimer.current) {
+      // quick exit to avoid double processing of rapid events
       return;
     }
 
-    // Clear previous debounce timer
-    if (debounceTimer.current) {
-      clearTimeout(debounceTimer.current);
+    // Prevent duplicate scans of same code while in cooldown
+    if (scanned || trimmedBarcode === lastScannedCode.current) {
+      return;
     }
 
-    // Set debounce timer
-    debounceTimer.current = setTimeout(async () => {
-      console.log('📷 Barcode Scanned:', {type, barcode: trimmedBarcode});
-      lastScannedCode.current = trimmedBarcode;
-      setScanned(true);
+    console.log('📷 Barcode Scanned:', {type, barcode: trimmedBarcode});
 
-      const item = await findItemByBarcode(trimmedBarcode);
-      console.log('🔍 Database lookup result:', item ? 'Found' : 'Not found');
+    // Start a short debounce window so multiple camera events in quick succession are ignored
+    debounceTimer.current = setTimeout(() => {
+      clearTimeout(debounceTimer.current);
+      debounceTimer.current = null;
+    }, 300); // small debounce to swallow immediate duplicated camera events
 
-      if (item) {
-        // Auto-add to cart
-        addToCart(item, 1);
+    // Mark scanned and remember last code
+    lastScannedCode.current = trimmedBarcode;
+    setScanned(true);
 
-        // Update scan queue
-        setScanQueue(prev => {
-          const existing = prev.find(q => q.itemId === item.id);
-          if (existing) {
-            return prev.map(q =>
-              q.itemId === item.id ? {...q, count: q.count + 1} : q,
-            );
-          }
-          return [...prev, {itemId: item.id, itemName: item.name, count: 1, item}];
-        });
+    // Visual & haptic feedback
+    triggerFlashAndHaptics();
 
-        // Reset scanner after 1 second
-        setTimeout(() => setScanned(false), 1000);
-      } else {
-        // Unknown barcode - show manual entry
-        setManualBarcode(trimmedBarcode);
-        setShowManualEntry(true);
+    const item = await findItemByBarcode(trimmedBarcode);
+    console.log('🔍 Database lookup result:', item ? 'Found' : 'Not found');
+
+    if (item) {
+      // Auto-add to cart
+      addToCart(item, 1);
+
+      // Update scan queue
+      setScanQueue(prev => {
+        const existing = prev.find(q => q.itemId === item.id);
+        if (existing) {
+          return prev.map(q =>
+            q.itemId === item.id ? {...q, count: q.count + 1} : q,
+          );
+        }
+        return [...prev, {itemId: item.id, itemName: item.name, count: 1, item}];
+      });
+
+      // Keep scanned true briefly to avoid double-adds (slightly longer cooldown than before)
+      // This is the "light delay" you asked for before allowing the next scan of the same item.
+      // We keep this small so the scanner still feels snappy but won't double-trigger.
+      if (cooldownTimer.current) {
+        clearTimeout(cooldownTimer.current);
+        cooldownTimer.current = null;
       }
-    }, 2000); // 2 second debounce
+      cooldownTimer.current = setTimeout(() => {
+        setScanned(false);
+        lastScannedCode.current = '';
+        cooldownTimer.current = null;
+      }, 800); // increased from 300ms -> 800ms to reduce accidental double-scans
+    } else {
+      // Unknown barcode - show manual entry
+      setManualBarcode(trimmedBarcode);
+      setShowManualEntry(true);
+
+      // allow the scanner to resume quickly so user can enter details
+      // keep a short lock to avoid immediate duplicates while user sees modal
+      setTimeout(() => {
+        setScanned(false);
+        lastScannedCode.current = '';
+      }, 300);
+    }
   };
 
   const handleManualAdd = async () => {
@@ -110,7 +210,7 @@ export default function ImprovedScannerScreen({navigation}) {
 
     try {
       let newItem;
-      
+
       await database.write(async () => {
         const itemsCollection = database.collections.get('items');
         newItem = await itemsCollection.create(item => {
@@ -158,7 +258,7 @@ export default function ImprovedScannerScreen({navigation}) {
         ),
       );
     }
-    
+
     // Update cart
     updateQuantity(itemId, newQuantity);
   };
@@ -193,11 +293,25 @@ export default function ImprovedScannerScreen({navigation}) {
       <CameraView
         style={styles.camera}
         onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
+        onCameraReady={() => {
+          // cameraReady fast path
+          setCameraReady(true);
+        }}
         barcodeScannerSettings={{
           barcodeTypes: ['qr', 'pdf417', 'upc_e', 'upc_a', 'ean13', 'ean8', 'code128', 'code39'],
         }}
       />
-      
+
+      {/* Flash overlay for quick feedback */}
+      <Animated.View pointerEvents="none" style={[styles.flashOverlay, {opacity: flashAnim}]} />
+
+      {/* Camera Loading Indicator */}
+      {!cameraReady && (
+        <View style={styles.loadingOverlay}>
+          <Text style={styles.loadingText}>Initializing camera...</Text>
+        </View>
+      )}
+
       {/* Fixed Scanner Frame */}
       <View style={styles.scannerOverlay}>
         <View style={styles.scannerFrame}>
@@ -205,6 +319,20 @@ export default function ImprovedScannerScreen({navigation}) {
           <View style={[styles.corner, styles.topRight]} />
           <View style={[styles.corner, styles.bottomLeft]} />
           <View style={[styles.corner, styles.bottomRight]} />
+
+          {/* Pulsing center guide dot */}
+          <Animated.View
+            style={[
+              styles.centerGuide,
+              {
+                transform: [{scale: pulseAnim}],
+                opacity: pulseAnim.interpolate({
+                  inputRange: [1, 1.2],
+                  outputRange: [0.8, 0.4],
+                }),
+              },
+            ]}
+          />
         </View>
       </View>
 
@@ -398,6 +526,17 @@ const styles = StyleSheet.create({
     borderTopWidth: 0,
     borderRightWidth: 4,
     borderBottomWidth: 4,
+  },
+  centerGuide: {
+    position: 'absolute',
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#6B46C1',
+    top: '50%',
+    left: '50%',
+    marginTop: -6,
+    marginLeft: -6,
   },
   header: {
     position: 'absolute',
@@ -616,5 +755,29 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#FFFFFF',
     fontWeight: 'bold',
+  },
+  loadingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  flashOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: Platform.OS === 'ios' ? '#fff' : '#fff',
+    zIndex: 50,
   },
 });

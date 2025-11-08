@@ -9,8 +9,7 @@ import {
   Alert,
 } from 'react-native';
 import {database} from '../db';
-import {isCloudAuthEnabled} from '../services/privacyService';
-import {signUp, signIn} from '../services/supabaseAuthService';
+import jwtAuthService from '../services/jwtAuthService';
 
 export default function OnboardingScreen({navigation, onComplete}) {
   const [mode, setMode] = useState('local'); // 'local' | 'signup' | 'signin'
@@ -62,69 +61,76 @@ export default function OnboardingScreen({navigation, onComplete}) {
   };
 
   const handleCloudSignup = async () => {
-    const enabled = await isCloudAuthEnabled();
-    if (!enabled) {
-      Alert.alert('Notice', 'Cloud authentication is disabled by default for privacy.');
-      return;
-    }
-
     if (!formData.email || !formData.password || !formData.name) {
       Alert.alert('Error', 'Please fill in all required fields');
       return;
     }
 
-    const result = await signUp(formData.email, formData.password, {
-      name: formData.name,
-      company_name: formData.companyName,
-      location: formData.location,
-      phone: formData.phone,
-      gstin: formData.gstin,
-    });
+    try {
+      const result = await jwtAuthService.signUp(formData.email, formData.password, formData.name);
 
-    if (result.success) {
-      await handleLocalOnboarding();
-    } else {
-      Alert.alert('Error', result.error);
+      if (result.success) {
+        // Save shop settings locally
+        await database.write(async () => {
+          const settingsCollection = database.collections.get('settings');
+          if (formData.companyName) {
+            await settingsCollection.create(s => {
+              s.key = 'shopName';
+              s.value = formData.companyName;
+            });
+          }
+          if (formData.location) {
+            await settingsCollection.create(s => {
+              s.key = 'location';
+              s.value = formData.location;
+            });
+          }
+          await settingsCollection.create(s => {
+            s.key = 'hasOnboarded';
+            s.value = 'true';
+          });
+        });
+
+        Alert.alert('Success', 'Account created successfully!', [
+          {text: 'OK', onPress: () => onComplete && onComplete()}
+        ]);
+      } else {
+        Alert.alert('Signup Failed', result.error || 'Failed to create account');
+      }
+    } catch (error) {
+      console.error('Signup error:', error);
+      Alert.alert('Error', 'An unexpected error occurred');
     }
   };
 
   const handleCloudSignIn = async () => {
-    const enabled = await isCloudAuthEnabled();
-    if (!enabled) {
-      Alert.alert('Notice', 'Cloud authentication is disabled by default for privacy.');
-      return;
-    }
-
     if (!formData.email || !formData.password) {
       Alert.alert('Error', 'Please enter email and password');
       return;
     }
 
-    const result = await signIn(formData.email, formData.password);
+    try {
+      const result = await jwtAuthService.signIn(formData.email, formData.password);
 
-    if (result.success) {
-      // Store user info locally
-      await database.write(async () => {
-        const settingsCollection = database.collections.get('settings');
-        await settingsCollection.create(s => {
-          s.key = 'userEmail';
-          s.value = formData.email;
+      if (result.success) {
+        // Mark as onboarded
+        await database.write(async () => {
+          const settingsCollection = database.collections.get('settings');
+          await settingsCollection.create(s => {
+            s.key = 'hasOnboarded';
+            s.value = 'true';
+          });
         });
-        await settingsCollection.create(s => {
-          s.key = 'hasOnboarded';
-          s.value = 'true';
-        });
-        await settingsCollection.create(s => {
-          s.key = 'authMode';
-          s.value = 'cloud';
-        });
-      });
 
-      if (onComplete) {
-        await onComplete();
+        Alert.alert('Success', 'Logged in successfully!', [
+          {text: 'OK', onPress: () => onComplete && onComplete()}
+        ]);
+      } else {
+        Alert.alert('Login Failed', result.error || 'Invalid credentials');
       }
-    } else {
-      Alert.alert('Error', result.error);
+    } catch (error) {
+      console.error('Login error:', error);
+      Alert.alert('Error', 'An unexpected error occurred');
     }
   };
 

@@ -1,4 +1,4 @@
-import React, {useState} from 'react';
+import React, {useState, useEffect} from 'react';
 import {
   View,
   Text,
@@ -7,11 +7,15 @@ import {
   TextInput,
   ScrollView,
   Alert,
+  FlatList,
 } from 'react-native';
 import {Ionicons} from '@expo/vector-icons';
 import {formatCurrency} from '../utils/formatters';
 import transactionService from '../services/transactionService';
 import {useCart} from '../context/CartContext';
+import {database} from '../db';
+import {Q} from '@nozbe/watermelondb';
+import customerService from '../services/customerService';
 
 export default function PaymentModeScreen({route, navigation}) {
   const {cartTotal, cartLines, totals, taxPercent, discount, otherCharges} = route.params || {};
@@ -24,6 +28,8 @@ export default function PaymentModeScreen({route, navigation}) {
   const [showGenerateSell, setShowGenerateSell] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showCustomerDetails, setShowCustomerDetails] = useState(false);
+  const [customerSuggestions, setCustomerSuggestions] = useState([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
 
   const paymentModes = [
     {
@@ -89,6 +95,9 @@ export default function PaymentModeScreen({route, navigation}) {
     setIsProcessing(true);
 
     try {
+      // Save customer to database if provided
+      await saveCustomer();
+
       // Process the payment using the transaction service
       const result = await transactionService.processPayment({
         cartLines,
@@ -127,35 +136,196 @@ export default function PaymentModeScreen({route, navigation}) {
     }
   };
 
+  // Search for customer by phone or name using enhanced customer service
+  const searchCustomers = async (query) => {
+    if (!query || query.length < 2) {
+      setCustomerSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+
+    try {
+      // Use enhanced customer service for better search with relevance scoring
+      const searchResults = await customerService.searchCustomers(query, {
+        limit: 5,
+        searchFields: ['name', 'phone', 'email'],
+        includeCloud: true // Include cloud search when online
+      });
+
+      setCustomerSuggestions(searchResults);
+      setShowSuggestions(searchResults.length > 0);
+    } catch (error) {
+      console.error('Customer search error:', error);
+      // Fallback to local search if enhanced service fails
+      try {
+        const customersCollection = database?.collections?.get('customers');
+        if (customersCollection) {
+          const allCustomers = await customersCollection.query().fetch();
+          const lowerQuery = query.toLowerCase();
+          const filtered = allCustomers.filter(customer => {
+            const nameMatch = customer.name && customer.name.toLowerCase().includes(lowerQuery);
+            const phoneMatch = customer.phone && customer.phone.includes(query);
+            return nameMatch || phoneMatch;
+          });
+          setCustomerSuggestions(filtered.slice(0, 5));
+          setShowSuggestions(filtered.length > 0);
+        }
+      } catch (fallbackError) {
+        console.error('Fallback customer search error:', fallbackError);
+        setCustomerSuggestions([]);
+        setShowSuggestions(false);
+      }
+    }
+  };
+
+  // Handle customer mobile input with debounce
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (customerMobile) {
+        searchCustomers(customerMobile);
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [customerMobile]);
+
+  // Handle customer name input with debounce
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (customerName && !customerMobile) {
+        searchCustomers(customerName);
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [customerName]);
+
+  // Select customer from suggestions with enhanced autofill
+  const selectCustomer = async (customer) => {
+    try {
+      // Use enhanced autofill to get complete customer data
+      const autofillResult = await customerService.autoFillCustomer({
+        phone: customer.phone,
+        email: customer.email,
+        name: customer.name
+      });
+
+      if (autofillResult.found && autofillResult.customer) {
+        // Use the enhanced customer data
+        const enhancedCustomer = autofillResult.customer;
+        setCustomerMobile(enhancedCustomer.phone || '');
+        setCustomerName(enhancedCustomer.name || '');
+        setCustomerEmail(enhancedCustomer.email || '');
+        setCustomerAddress(enhancedCustomer.address || '');
+      } else {
+        // Fallback to basic customer data
+        setCustomerMobile(customer.phone || '');
+        setCustomerName(customer.name || '');
+        setCustomerEmail(customer.email || '');
+        setCustomerAddress(customer.address || '');
+      }
+    } catch (error) {
+      console.error('Enhanced autofill error:', error);
+      // Fallback to basic customer data
+      setCustomerMobile(customer.phone || '');
+      setCustomerName(customer.name || '');
+      setCustomerEmail(customer.email || '');
+      setCustomerAddress(customer.address || '');
+    }
+    
+    setShowSuggestions(false);
+    setCustomerSuggestions([]);
+  };
+
+  // Save new customer to database using enhanced customer service
+  const saveCustomer = async () => {
+    if (!customerMobile && !customerName) {
+      return null;
+    }
+
+    try {
+      let customer = null;
+
+      // First try to find existing customer using enhanced service
+      const existingCustomer = await customerService.getCustomerByPhone(customerMobile);
+      
+      if (existingCustomer) {
+        // Update existing customer using enhanced service
+        customer = await customerService.saveCustomer({
+          localId: existingCustomer.localId,
+          name: customerName || existingCustomer.name,
+          phone: customerMobile || existingCustomer.phone,
+          email: customerEmail || existingCustomer.email,
+          address: customerAddress || existingCustomer.address,
+          userId: existingCustomer.userId
+        });
+      } else {
+        // Create new customer using enhanced service
+        customer = await customerService.saveCustomer({
+          name: customerName || 'Customer',
+          phone: customerMobile || '',
+          email: customerEmail || '',
+          address: customerAddress || '',
+          userId: 'current_user_id' // This should be set from auth context
+        });
+      }
+
+      return customer;
+    } catch (error) {
+      console.error('Save customer error:', error);
+      // Fallback to direct database operations
+      try {
+        let customer = null;
+        const customersCollection = database.collections.get('customers');
+        let existing = [];
+        
+        if (customerMobile && customerMobile.trim()) {
+          existing = await customersCollection
+            .query(Q.where('phone', customerMobile))
+            .fetch();
+        }
+
+        await database.write(async () => {
+          if (existing.length > 0) {
+            customer = existing[0];
+            await customer.update(c => {
+              if (customerName) c.name = customerName;
+              if (customerEmail) c.email = customerEmail;
+              if (customerAddress) c.address = customerAddress;
+              c.isSynced = false;
+            });
+          } else {
+            customer = await customersCollection.create(c => {
+              c.phone = customerMobile || '';
+              c.name = customerName || 'Customer';
+              c.email = customerEmail || '';
+              c.address = customerAddress || '';
+              c.isSynced = false;
+            });
+          }
+        });
+
+        return customer;
+      } catch (fallbackError) {
+        console.error('Fallback save customer error:', fallbackError);
+        return null;
+      }
+    }
+  };
+
   const handleSearchCustomer = () => {
     if (!customerMobile.trim()) {
       Alert.alert('Error', 'Please enter mobile number');
       return;
     }
     
-    // TODO: Implement customer search
-    Alert.alert('Search Customer', `Searching for customer with mobile: ${customerMobile}`);
+    searchCustomers(customerMobile);
   };
 
   return (
     <View style={styles.container}>
       {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.headerTop}>
-          <Text style={styles.timeText}>21:55</Text>
-          <Ionicons name="refresh" size={20} color="#FFFFFF" />
-        </View>
-        <View style={styles.headerCenter}>
-          <Ionicons name="menu" size={24} color="#FFFFFF" />
-          <Text style={styles.storeName}>Sks</Text>
-          <Ionicons name="chevron-down" size={20} color="#FFFFFF" />
-        </View>
-        <View style={styles.headerIcons}>
-          <Ionicons name="person-add" size={24} color="#FFFFFF" />
-          <Ionicons name="chatbubble" size={24} color="#FFFFFF" />
-        </View>
-      </View>
-
+      
       <ScrollView style={styles.content}>
         {/* Customer Details Section */}
         <View style={styles.section}>
@@ -192,6 +362,27 @@ export default function PaymentModeScreen({route, navigation}) {
               />
             </TouchableOpacity>
           </View>
+
+          {/* Customer Suggestions */}
+          {showSuggestions && customerSuggestions.length > 0 && (
+            <View style={styles.suggestionsContainer}>
+              <FlatList
+                data={customerSuggestions}
+                keyExtractor={item => item.id}
+                renderItem={({item}) => (
+                  <TouchableOpacity
+                    style={styles.suggestionItem}
+                    onPress={() => selectCustomer(item)}>
+                    <View style={styles.suggestionContent}>
+                      <Text style={styles.suggestionName}>{item.name}</Text>
+                      <Text style={styles.suggestionPhone}>{item.phone}</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={20} color="#999" />
+                  </TouchableOpacity>
+                )}
+              />
+            </View>
+          )}
 
           {/* Additional Customer Details */}
           {showCustomerDetails && (
@@ -271,6 +462,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F5F5F5',
+    marginTop:50
   },
   header: {
     backgroundColor: '#1E3A8A',
@@ -472,5 +664,39 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: 'bold',
     color: '#6B46C1',
+  },
+  suggestionsContainer: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    marginTop: 8,
+    maxHeight: 200,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: {width: 0, height: 2},
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+  },
+  suggestionItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+  },
+  suggestionContent: {
+    flex: 1,
+  },
+  suggestionName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 4,
+  },
+  suggestionPhone: {
+    fontSize: 14,
+    color: '#666',
   },
 });

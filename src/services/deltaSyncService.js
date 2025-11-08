@@ -3,7 +3,7 @@ import { Q } from '@nozbe/watermelondb';
 import authService from './authService';
 import NetInfo from '@react-native-community/netinfo';
 
-const API_BASE_URL = 'http://localhost:3000/api';
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000/api';
 
 /**
  * Delta Sync Service with Conflict Resolution
@@ -90,17 +90,27 @@ class DeltaSyncService {
       let totalPushed = 0;
 
       for (const collectionName of collections) {
-        const collection = database.collections.get(collectionName);
+        const collection = database?.collections?.get(collectionName);
         
-        // Get unsynced records (is_synced = false or updated_at > last_sync_time)
-        const unsyncedRecords = await collection
-          .query(
-            Q.or(
-              Q.where('is_synced', false),
-              Q.where('updated_at', Q.gte(this.lastSyncTime || new Date(0)))
-            )
-          )
-          .fetch();
+        if (!collection) {
+          console.warn(`Collection ${collectionName} not found, skipping`);
+          continue;
+        }
+        
+        // Get unsynced records (is_synced = false or null)
+        let unsyncedRecords = [];
+        try {
+          // Query for records where is_synced is false or doesn't exist
+          const allRecords = await collection.query().fetch();
+          unsyncedRecords = allRecords.filter(record => {
+            // Check if is_synced is false or undefined/null
+            return record.isSynced === false || record.isSynced === null || record.isSynced === undefined;
+          });
+        } catch (queryError) {
+          console.warn(`Query error for ${collectionName}:`, queryError.message);
+          // Fallback: get all records if query fails
+          unsyncedRecords = await collection.query().fetch();
+        }
 
         if (unsyncedRecords.length === 0) continue;
 
@@ -120,8 +130,8 @@ class DeltaSyncService {
           await database.write(async () => {
             for (const record of unsyncedRecords) {
               await record.update(r => {
-                r.is_synced = true;
-                r.synced_at = new Date().toISOString();
+                r.isSynced = true;
+                r.syncedAt = new Date().toISOString();
               });
             }
           });
@@ -141,6 +151,10 @@ class DeltaSyncService {
    */
   async pushCollection(collectionName, records) {
     try {
+      if (!this.isOnline) {
+        return { success: false, error: 'Device is offline' };
+      }
+      
       const endpoint = this.getCollectionEndpoint(collectionName);
       const response = await authService.authenticatedRequest(`${API_BASE_URL}${endpoint}/batch`, {
         method: 'POST',
@@ -148,6 +162,7 @@ class DeltaSyncService {
       });
 
       if (!response.success) {
+        console.warn(`Push ${collectionName} failed:`, response.error);
         return { success: false, error: response.error };
       }
 
@@ -186,11 +201,16 @@ class DeltaSyncService {
    */
   async pullCollection(collectionName) {
     try {
+      if (!this.isOnline) {
+        return { success: false, error: 'Device is offline' };
+      }
+      
       const endpoint = this.getCollectionEndpoint(collectionName);
       const url = `${API_BASE_URL}${endpoint}?since=${this.lastSyncTime?.toISOString() || ''}`;
       
       const response = await authService.authenticatedRequest(url);
       if (!response.success) {
+        console.warn(`Pull ${collectionName} failed:`, response.error);
         return { success: false, error: response.error };
       }
 
@@ -217,7 +237,12 @@ class DeltaSyncService {
    * Merge server records with local records (conflict resolution)
    */
   async mergeRecords(collectionName, serverRecords) {
-    const collection = database.collections.get(collectionName);
+    const collection = database?.collections?.get(collectionName);
+    
+    if (!collection) {
+      console.warn(`Collection ${collectionName} not found`);
+      return;
+    }
 
     await database.write(async () => {
       for (const serverRecord of serverRecords) {
@@ -282,7 +307,13 @@ class DeltaSyncService {
 
     try {
       // Push local changes for this collection
-      const collection = database.collections.get(collectionName);
+      const collection = database?.collections?.get(collectionName);
+      
+      if (!collection) {
+        console.warn(`Collection ${collectionName} not found`);
+        return { success: false, error: 'Collection not found' };
+      }
+      
       const unsyncedRecords = await collection
         .query(Q.where('is_synced', false))
         .fetch();

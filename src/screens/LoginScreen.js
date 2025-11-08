@@ -13,7 +13,7 @@ import {
 import {Ionicons} from '@expo/vector-icons';
 import jwtAuthService from '../services/jwtAuthService';
 
-export default function LoginScreen({navigation}) {
+export default function LoginScreen({navigation, onLoginSuccess}) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -30,8 +30,11 @@ export default function LoginScreen({navigation}) {
       const result = await jwtAuthService.signIn(email, password);
       
       if (result.success) {
-        // Navigation will be handled by App.js state change
-        console.log('Login successful');
+        console.log('✅ Login successful - auth saved to storage');
+        // Call the callback to trigger navigation immediately
+        if (onLoginSuccess) {
+          onLoginSuccess();
+        }
       } else {
         Alert.alert('Login Failed', result.error);
       }

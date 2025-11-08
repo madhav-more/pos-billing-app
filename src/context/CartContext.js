@@ -1,10 +1,45 @@
-import React, {createContext, useContext, useState, useCallback} from 'react';
+import React, {createContext, useContext, useState, useCallback, useEffect} from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {calculateLineTotal, calculateTransactionTotals} from '../utils/calculations';
 
 const CartContext = createContext();
 
 export function CartProvider({children}) {
   const [cartLines, setCartLines] = useState([]);
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  // Load cart from storage on mount
+  useEffect(() => {
+    loadCart();
+  }, []);
+
+  // Save cart to storage whenever it changes
+  useEffect(() => {
+    if (isLoaded) {
+      saveCart();
+    }
+  }, [cartLines, isLoaded]);
+
+  const loadCart = async () => {
+    try {
+      const savedCart = await AsyncStorage.getItem('cart_data');
+      if (savedCart) {
+        setCartLines(JSON.parse(savedCart));
+      }
+    } catch (error) {
+      console.error('Error loading cart:', error);
+    } finally {
+      setIsLoaded(true);
+    }
+  };
+
+  const saveCart = async () => {
+    try {
+      await AsyncStorage.setItem('cart_data', JSON.stringify(cartLines));
+    } catch (error) {
+      console.error('Error saving cart:', error);
+    }
+  };
 
   const addToCart = useCallback((item, quantity = 1) => {
     setCartLines(prev => {

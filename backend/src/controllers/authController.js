@@ -1,4 +1,4 @@
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 
@@ -26,7 +26,14 @@ export const signup = async (req, res) => {
 
     res.status(201).json({
       token,
-      user: { id: user._id, name: user.name, email: user.email, company: user.company, location: user.location }
+      user: { 
+        id: user._id, 
+        name: user.name, 
+        email: user.email, 
+        company: user.company, 
+        location: user.location,
+        company_code: user.company?.substring(0, 3).toUpperCase() || 'GUR' // Default company code
+      }
     });
   } catch (error) {
     console.error('Signup error:', error);
@@ -60,10 +67,87 @@ export const login = async (req, res) => {
 
     res.json({
       token,
-      user: { id: user._id, name: user.name, email: user.email, company: user.company, location: user.location }
+      user: { 
+        id: user._id, 
+        name: user.name, 
+        email: user.email, 
+        company: user.company, 
+        location: user.location,
+        company_code: user.company?.substring(0, 3).toUpperCase() || 'GUR' // Default company code
+      }
     });
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Failed to login' });
+  }
+};
+
+export const validateToken = async (req, res) => {
+  try {
+    // req.user is set by authenticateToken middleware
+    const user = await User.findById(req.user.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({
+      valid: true,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        company: user.company,
+        location: user.location,
+        company_code: user.company?.substring(0, 3).toUpperCase() || 'GUR'
+      }
+    });
+  } catch (error) {
+    console.error('Token validation error:', error);
+    res.status(500).json({ error: 'Failed to validate token' });
+  }
+};
+
+export const refreshToken = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const newToken = jwt.sign(
+      { userId: user._id.toString(), email: user.email },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+    );
+
+    res.json({
+      token: newToken,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        company: user.company,
+        location: user.location,
+        company_code: user.company?.substring(0, 3).toUpperCase() || 'GUR'
+      }
+    });
+  } catch (error) {
+    console.error('Token refresh error:', error);
+    res.status(500).json({ error: 'Failed to refresh token' });
+  }
+};
+
+export const logout = async (req, res) => {
+  try {
+    // Server-side logout logic (e.g., blacklist token, log activity)
+    console.log(`User ${req.user.userId} logged out`);
+    
+    res.json({
+      success: true,
+      message: 'Logged out successfully'
+    });
+  } catch (error) {
+    console.error('Logout error:', error);
+    res.status(500).json({ error: 'Failed to logout' });
   }
 };

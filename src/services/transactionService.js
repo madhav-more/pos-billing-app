@@ -26,15 +26,36 @@ class TransactionService {
     try {
       let transactionId;
       let savedLines;
+      let shopInfo = {
+        shopName: 'G.U.R.U Store',
+        ownerName: '',
+        location: ''
+      };
+
+      // Get shop info for receipt (outside write block)
+      try {
+        const settingsCollection = database.collections.get('settings');
+        const settings = await settingsCollection.query().fetch();
+        shopInfo = {
+          shopName: settings.find(s => s.key === 'shopName')?.value || 'G.U.R.U Store',
+          ownerName: settings.find(s => s.key === 'ownerName')?.value || '',
+          location: settings.find(s => s.key === 'location')?.value || ''
+        };
+      } catch (settingsError) {
+        console.warn('Could not load shop settings:', settingsError.message);
+      }
 
       // Create transaction in database
       await database.write(async () => {
         const transactionsCollection = database.collections.get('transactions');
         const transactionLinesCollection = database.collections.get('transaction_lines');
-        const settingsCollection = database.collections.get('settings');
+        const itemsCollection = database.collections.get('items');
 
         // Create transaction
         const transaction = await transactionsCollection.create(txn => {
+          txn.customerId = null; // Will be set when customer sync returns server ID
+          txn.customerName = customerName || 'Walk-in Customer';
+          txn.customerMobile = customerMobile || '';
           txn.date = new Date().toISOString();
           txn.subtotal = totals.subtotal;
           txn.tax = totals.tax;
@@ -45,33 +66,40 @@ class TransactionService {
           txn.unitCount = totals.unitCount;
           txn.paymentType = paymentMode;
           txn.status = 'completed';
-          txn.customerName = customerName;
-          txn.customerMobile = customerMobile;
           txn.isSynced = false;
+          txn.syncedAt = null;
         });
 
         transactionId = transaction.id;
 
-        // Create transaction lines
+        // Create transaction lines and deduct inventory
         savedLines = await Promise.all(
-          cartLines.map(line =>
-            transactionLinesCollection.create(txnLine => {
-              txnLine.transactionId = transaction.id;
-              txnLine.itemId = line.itemId;
-              txnLine.itemName = line.itemName;
-              txnLine.quantity = line.quantity;
-              txnLine.unitPrice = line.unitPrice;
-              txnLine.perLineDiscount = line.perLineDiscount;
-              txnLine.lineTotal = line.lineTotal;
-            }),
-          ),
-        );
+          cartLines.map(async line => {
+            // Create transaction line
+            const txnLine = await transactionLinesCollection.create(tl => {
+              tl.transactionId = transaction.id;
+              tl.itemId = line.itemId;
+              tl.itemName = line.itemName;
+              tl.quantity = line.quantity;
+              tl.unitPrice = line.unitPrice;
+              tl.perLineDiscount = line.perLineDiscount;
+              tl.lineTotal = line.lineTotal;
+            });
 
-        // Get shop info for receipt
-        const settings = await settingsCollection.query().fetch();
-        const shopName = settings.find(s => s.key === 'shopName')?.value || 'G.U.R.U Store';
-        const ownerName = settings.find(s => s.key === 'ownerName')?.value || '';
-        const location = settings.find(s => s.key === 'location')?.value || '';
+            // Deduct inventory quantity immediately
+            try {
+              const item = await itemsCollection.find(line.itemId);
+              await item.update(i => {
+                i.inventoryQty = Math.max(0, i.inventoryQty - line.quantity);
+                i.isSynced = false; // Mark for sync
+              });
+            } catch (error) {
+              console.error(`Failed to deduct inventory for item ${line.itemId}:`, error);
+            }
+
+            return txnLine;
+          }),
+        );
       });
 
       // Generate PDF receipt
@@ -99,7 +127,7 @@ class TransactionService {
             perLineDiscount: l.perLineDiscount,
             lineTotal: l.lineTotal,
           })),
-          {shopName, ownerName, location},
+          shopInfo,
         );
 
         if (pdfResult.success) {

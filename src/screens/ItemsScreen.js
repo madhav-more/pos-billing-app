@@ -31,18 +31,16 @@ export default function ItemsScreen() {
   });
 
   useEffect(() => {
-    loadItems();
-  }, []);
-
-  const loadItems = async () => {
-    try {
-      const itemsCollection = database.collections.get('items');
-      const allItems = await itemsCollection.query().fetch();
+    // Use WatermelonDB observable for live updates
+    const itemsCollection = database.collections.get('items');
+    const subscription = itemsCollection.query().observe().subscribe(allItems => {
       setItems(allItems);
-    } catch (error) {
-      console.error('Error loading items:', error);
-    }
-  };
+      console.log('📦 Items updated (live):', allItems.length);
+    });
+
+    // Cleanup subscription on unmount
+    return () => subscription.unsubscribe();
+  }, []);
 
   const filteredItems = searchQuery
     ? items.filter(item =>
@@ -70,9 +68,9 @@ export default function ItemsScreen() {
             item.costPrice = formData.costPrice ? parseFloat(formData.costPrice) : null;
             item.mrp = formData.mrp ? parseFloat(formData.mrp) : null;
             item.minStock = formData.minStock ? parseInt(formData.minStock) : null;
-            item.currentStock = formData.currentStock ? parseInt(formData.currentStock) : 0;
+            item.inventoryQty = formData.currentStock ? parseInt(formData.currentStock) : 0;
             item.recommended = item.recommended || false;
-            item.syncedToCloud = false;
+            item.isSynced = false;
           });
         } else {
           await itemsCollection.create(item => {
@@ -83,14 +81,13 @@ export default function ItemsScreen() {
             item.costPrice = formData.costPrice ? parseFloat(formData.costPrice) : null;
             item.mrp = formData.mrp ? parseFloat(formData.mrp) : null;
             item.minStock = formData.minStock ? parseInt(formData.minStock) : null;
-            item.currentStock = formData.currentStock ? parseInt(formData.currentStock) : 0;
+            item.inventoryQty = formData.currentStock ? parseInt(formData.currentStock) : 0;
             item.recommended = false;
-            item.syncedToCloud = false;
+            item.isSynced = false;
           });
         }
       });
 
-      await loadItems();
       closeModal();
       Alert.alert('Success', editingItem ? 'Item updated' : 'Item created');
       
@@ -113,7 +110,7 @@ export default function ItemsScreen() {
       costPrice: item.costPrice?.toString() || '',
       mrp: item.mrp?.toString() || '',
       minStock: item.minStock?.toString() || '',
-      currentStock: item.currentStock?.toString() || '',
+      currentStock: item.inventoryQty?.toString() || '0',
     });
     setModalVisible(true);
   };
@@ -132,7 +129,7 @@ export default function ItemsScreen() {
               await database.write(async () => {
                 await item.markAsDeleted();
               });
-              await loadItems();
+              // Observable will auto-update the list
             } catch (error) {
               console.error('Error deleting item:', error);
             }
@@ -163,15 +160,29 @@ export default function ItemsScreen() {
     setEditingItem(null);
   };
 
-  const renderItem = ({item}) => (
+  const renderItem = ({item}) => {
+    const stock = item.inventoryQty || 0;
+    const isLowStock = stock > 0 && stock <= 10;
+    const isOutOfStock = stock === 0;
+    
+    return (
     <View style={styles.itemCard}>
       <View style={styles.itemInfo}>
         <Text style={styles.itemName}>{item.name}</Text>
         <Text style={styles.itemCategory}>{item.category}</Text>
         <Text style={styles.itemPrice}>₹{item.price?.toFixed(2)} / {item.unit}</Text>
-        {item.currentStock !== undefined && (
-          <Text style={styles.itemStock}>Stock: {item.currentStock}</Text>
-        )}
+        <View style={styles.stockRow}>
+          <Text style={[
+            styles.itemStock,
+            isOutOfStock && styles.stockOut,
+            isLowStock && styles.stockLow
+          ]}>
+            {isOutOfStock ? '🔴' : isLowStock ? '🟡' : '🟢'} Stock: {stock}
+          </Text>
+          {!item.isSynced && (
+            <Text style={styles.syncBadge}>🔄 Pending</Text>
+          )}
+        </View>
       </View>
       <View style={styles.itemActions}>
         <TouchableOpacity style={styles.editButton} onPress={() => handleEditItem(item)}>
@@ -183,6 +194,7 @@ export default function ItemsScreen() {
       </View>
     </View>
   );
+  };
 
   return (
     <View style={styles.container}>
@@ -320,6 +332,10 @@ const styles = StyleSheet.create({
   itemCategory: {fontSize: 14, color: '#999', marginBottom: 4},
   itemPrice: {fontSize: 16, fontWeight: 'bold', color: '#6B46C1', marginBottom: 4},
   itemStock: {fontSize: 12, color: '#666'},
+  stockRow: {flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4},
+  stockOut: {color: '#DC2626', fontWeight: '600'},
+  stockLow: {color: '#F59E0B', fontWeight: '600'},
+  syncBadge: {fontSize: 10, color: '#6B46C1', backgroundColor: '#EDE9FE', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4},
   itemActions: {flexDirection: 'row', gap: 8},
   editButton: {padding: 8},
   deleteButton: {padding: 8},

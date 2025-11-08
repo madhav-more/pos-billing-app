@@ -1,14 +1,16 @@
-import React, {useEffect} from 'react';
-import {View, Text, StyleSheet, TouchableOpacity} from 'react-native';
+import React, {useEffect, useState} from 'react';
+import {View, Text, StyleSheet, TouchableOpacity, Alert} from 'react-native';
 import {formatCurrency} from '../utils/formatters';
 
 export default function PaymentSuccessScreen({route, navigation}) {
-  const {total, isOffline = false} = route.params || {};
+  const {total, isOffline = false, paymentMode, customerName} = route.params || {};
+  const [toastVisible, setToastVisible] = useState(false);
 
   useEffect(() => {
     if (isOffline) {
       // Show toast notification
-      console.log('Bill/Receipt generated offline or with slow internet successfully');
+      setToastVisible(true);
+      setTimeout(() => setToastVisible(false), 3000);
     }
   }, [isOffline]);
 
@@ -30,6 +32,14 @@ export default function PaymentSuccessScreen({route, navigation}) {
           <Text style={styles.amountLabel}>Total Amount</Text>
           <Text style={styles.amount}>{formatCurrency(total || 0)}</Text>
         </View>
+
+        {toastVisible && (
+          <View style={styles.toastContainer}>
+            <Text style={styles.toastText}>
+              ✓ Bill... generated offline or with slow internet
+            </Text>
+          </View>
+        )}
 
         {isOffline && (
           <View style={styles.offlineNotice}>
@@ -118,6 +128,24 @@ const styles = StyleSheet.create({
     fontSize: 42,
     fontWeight: 'bold',
     color: '#6B46C1',
+  },
+  toastContainer: {
+    backgroundColor: '#4CAF50',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+    width: '100%',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: {width: 0, height: 2},
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+  },
+  toastText: {
+    fontSize: 14,
+    color: '#FFFFFF',
+    textAlign: 'center',
+    fontWeight: '600',
   },
   offlineNotice: {
     backgroundColor: '#FFF3CD',

@@ -4,22 +4,25 @@ import {createStackNavigator} from '@react-navigation/stack';
 import {createBottomTabNavigator} from '@react-navigation/bottom-tabs';
 import {GestureHandlerRootView} from 'react-native-gesture-handler';
 import {StatusBar} from 'expo-status-bar';
+import {Provider} from 'react-redux';
+import {PersistGate} from 'redux-persist/integration/react';
+import {store, persistor} from './src/store';
 import {database} from './src/db';
 import {seedDatabase} from './src/db/seed-script';
 import {CartProvider} from './src/context/CartContext';
 import {autoSync} from './src/services/cloudSyncService';
-import jwtAuthService from './src/services/jwtAuthService';
+import userProfileService from './src/services/userProfileService';
+import syncManager from './src/services/syncManager';
 
 // Screens
 import SplashScreen from './src/screens/SplashScreen';
 import OnboardingScreen from './src/screens/OnboardingScreen';
-import LoginScreen from './src/screens/LoginScreen';
-import SignupScreen from './src/screens/SignupScreen';
+import UserSetupScreen from './src/screens/UserSetupScreen';
 import HomeScreen from './src/screens/HomeScreen';
 import ScannerScreen from './src/screens/ImprovedScannerScreen';
 import CounterScreen from './src/screens/CounterScreen';
 import ItemsScreen from './src/screens/ItemsScreen';
-import SettingsScreen from './src/screens/SettingsScreen';
+import EnhancedSettingsScreen from './src/screens/EnhancedSettingsScreen';
 import ReportsScreen from './src/screens/ReportsScreen';
 import PaymentSuccessScreen from './src/screens/PaymentSuccessScreen';
 import PaymentModeScreen from './src/screens/PaymentModeScreen';
@@ -41,7 +44,7 @@ function MainTabs({onLogout}) {
       <Tab.Screen name="Items" component={ItemsScreen} />
       <Tab.Screen name="Reports" component={ReportsScreen} />
       <Tab.Screen name="More">
-        {props => <SettingsScreen {...props} onLogout={onLogout} />}
+        {props => <EnhancedSettingsScreen {...props} onLogout={onLogout} />}
       </Tab.Screen>
     </Tab.Navigator>
   );
@@ -50,7 +53,7 @@ function MainTabs({onLogout}) {
 function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [isOnboarded, setIsOnboarded] = useState(false);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [hasUserProfile, setHasUserProfile] = useState(false);
   const [user, setUser] = useState(null);
   const [forceRefresh, setForceRefresh] = useState(0);
 
@@ -58,12 +61,23 @@ function App() {
     initializeApp();
   }, [forceRefresh]);
 
+  // Separate effect for sync manager
+  useEffect(() => {
+    if (hasUserProfile) {
+      syncManager.initialize();
+      return () => {
+        syncManager.cleanup();
+      };
+    }
+  }, [hasUserProfile]);
+
   const initializeApp = async () => {
     try {
-      // Initialize authentication
-      const authState = await jwtAuthService.initialize();
-      setIsAuthenticated(authState.isAuthenticated);
-      setUser(authState.user);
+      // Check if user profile exists
+      const profileState = await userProfileService.initialize();
+      console.log('🚀 App initialization - Has profile:', profileState.hasUser);
+      setHasUserProfile(profileState.hasUser);
+      setUser(profileState.user);
       
       const settingsCollection = database.collections.get('settings');
       const itemsCollection = database.collections.get('items');
@@ -80,18 +94,25 @@ function App() {
         const onboardingSetting = updatedSettings.find(s => s.key === 'hasOnboarded');
         setIsOnboarded(onboardingSetting?.value === 'true');
       } else {
-        // Database has data, just check onboarding status
+        // Database has data - assume onboarding is done
         console.log('Database has data, items:', items.length, 'settings:', settings.length);
         const onboardingSetting = settings.find(s => s.key === 'hasOnboarded');
-        setIsOnboarded(onboardingSetting?.value === 'true');
-      }
-
-      // Auto-sync with cloud if authenticated
-      if (authState.isAuthenticated) {
-        autoSync().catch(err => console.error('Auto-sync failed:', err));
+        // If data exists but no onboarding flag, set it as onboarded
+        const isOnboardedValue = onboardingSetting?.value === 'true' || items.length > 0;
+        console.log('✅ Setting onboarded:', isOnboardedValue);
+        setIsOnboarded(isOnboardedValue);
       }
       
-      setTimeout(() => setIsLoading(false), 1000);
+      // End loading immediately - don't wait for sync
+      console.log('⏱️ Setting isLoading to false, hasUserProfile:', profileState.hasUser);
+      setIsLoading(false);
+
+      // Auto-sync with cloud in background (non-blocking)
+      if (profileState.hasUser) {
+        setTimeout(() => {
+          autoSync().catch(err => console.log('Auto-sync skipped:', err.message));
+        }, 2000); // Delay sync by 2 seconds after app loads
+      }
     } catch (error) {
       console.error('App initialization error:', error);
       setIsLoading(false);
@@ -115,22 +136,30 @@ function App() {
   };
 
   return (
-    <GestureHandlerRootView style={{flex: 1}}>
-      <StatusBar style="light" />
-      <CartProvider>
-        <NavigationContainer>
+    <Provider store={store}>
+      <PersistGate loading={null} persistor={persistor}>
+        <GestureHandlerRootView style={{flex: 1}}>
+          <StatusBar style="light" />
+          <CartProvider>
+            <NavigationContainer>
           <Stack.Navigator screenOptions={{headerShown: false}}>
+            {(() => {
+              console.log('🧭 Navigation state - isLoading:', isLoading, 'isOnboarded:', isOnboarded, 'hasUserProfile:', hasUserProfile);
+              return null;
+            })()}
             {isLoading ? (
               <Stack.Screen name="Splash" component={SplashScreen} />
             ) : !isOnboarded ? (
               <Stack.Screen name="Onboarding">
                 {props => <OnboardingScreen {...props} onComplete={checkOnboardingStatus} />}
               </Stack.Screen>
-            ) : !isAuthenticated ? (
-              <>
-                <Stack.Screen name="Login" component={LoginScreen} />
-                <Stack.Screen name="Signup" component={SignupScreen} />
-              </>
+            ) : !hasUserProfile ? (
+              <Stack.Screen name="UserSetup">
+                {props => <UserSetupScreen {...props} onSetupComplete={() => {
+                  console.log('✅ Profile setup callback triggered');
+                  setForceRefresh(prev => prev + 1);
+                }} />}
+              </Stack.Screen>
             ) : (
               <>
                 <Stack.Screen name="MainTabs">
@@ -159,9 +188,11 @@ function App() {
               </>
             )}
           </Stack.Navigator>
-        </NavigationContainer>
-      </CartProvider>
-    </GestureHandlerRootView>
+            </NavigationContainer>
+          </CartProvider>
+        </GestureHandlerRootView>
+      </PersistGate>
+    </Provider>
   );
 }
 
