@@ -14,15 +14,18 @@
       "distribution": "internal",
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "NPM_CONFIG_LEGACY_PEER_DEPS": "true"
       }
     },
     "production": {
       "android": {
-        "buildType": "apk",
-        "gradleCommand": ":app:assembleRelease"
+        "buildType": "app-bundle"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://your-api-url.com/api"
+        "EXPO_PUBLIC_API_URL": "https://your-api-url.com/api",
+        "NPM_CONFIG_LEGACY_PEER_DEPS": "true"
       }
     }
   },
