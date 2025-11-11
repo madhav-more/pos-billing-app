@@ -63,3 +63,5 @@ fastlane/test_output
 .vscode/
 .cache/
 .expo/
+.expo/
+.expo/
