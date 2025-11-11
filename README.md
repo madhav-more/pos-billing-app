@@ -373,7 +373,7 @@ Body: { since: "2025-01-08T00:00:00.000Z" }
 
 ## 📄 License
 
-MIT License
+all copyright right reserved by Madhav More
 
 ## 👥 Support
 
