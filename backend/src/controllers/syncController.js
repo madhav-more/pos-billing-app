@@ -1,6 +1,7 @@
 import Item from '../models/Item.js';
 import Customer from '../models/Customer.js';
 import Transaction from '../models/Transaction.js';
+import User from '../models/User.js';
 
 export const pullChanges = async (req, res) => {
   const { since } = req.body;
@@ -73,11 +74,14 @@ export const pushChanges = async (req, res) => {
           
           if (existingItem) {
             // Update existing item with conflict resolution (last-write-wins)
-            if (new Date(item.updated_at) > existingItem.updatedAt) {
+            const itemDate = new Date(item.updatedAt || item.updated_at);
+            if (itemDate > existingItem.updatedAt) {
+              // Exclude _id from update to avoid immutable field error
+              const { _id, ...itemWithoutId } = item;
               await Item.findByIdAndUpdate(existingItem._id, {
-                ...item,
+                ...itemWithoutId,
                 user_id: userId,
-                updatedAt: new Date(item.updated_at)
+                updatedAt: itemDate
               });
             }
           } else {
@@ -85,7 +89,7 @@ export const pushChanges = async (req, res) => {
             const newItem = new Item({
               ...item,
               user_id: userId,
-              updatedAt: new Date(item.updated_at)
+              updatedAt: new Date(item.updatedAt || item.updated_at || Date.now())
             });
             await newItem.save();
             existingItem = newItem;
@@ -128,11 +132,14 @@ export const pushChanges = async (req, res) => {
           
           if (existingCustomer) {
             // Update existing customer with conflict resolution (last-write-wins)
-            if (new Date(customer.updated_at) > existingCustomer.updatedAt) {
+            const customerDate = new Date(customer.updatedAt || customer.updated_at);
+            if (customerDate > existingCustomer.updatedAt) {
+              // Exclude _id from update to avoid immutable field error
+              const { _id, ...customerWithoutId } = customer;
               await Customer.findByIdAndUpdate(existingCustomer._id, {
-                ...customer,
+                ...customerWithoutId,
                 user_id: userId,
-                updatedAt: new Date(customer.updated_at)
+                updatedAt: customerDate
               });
             }
           } else {
@@ -140,7 +147,7 @@ export const pushChanges = async (req, res) => {
             const newCustomer = new Customer({
               ...customer,
               user_id: userId,
-              updatedAt: new Date(customer.updated_at)
+              updatedAt: new Date(customer.updatedAt || customer.updated_at || Date.now())
             });
             await newCustomer.save();
             existingCustomer = newCustomer;
@@ -203,8 +210,17 @@ export const pushChanges = async (req, res) => {
                 sequence = lastSeq + 1;
               }
               
-              const user = await require('../models/User').findById(userId);
-              const companyCode = user?.company_code || 'GUR';
+              // Skip User lookup for simple auth (UUID strings)
+              // Only lookup if userId looks like MongoDB ObjectId (24 hex chars)
+              let companyCode = 'GUR';
+              if (userId && /^[0-9a-fA-F]{24}$/.test(userId)) {
+                try {
+                  const user = await User.findById(userId);
+                  companyCode = user?.company_code || 'GUR';
+                } catch (err) {
+                  console.log('User lookup skipped for simple auth');
+                }
+              }
               voucherNumber = `${companyCode}-${dateStr}-${sequence.toString().padStart(4, '0')}`;
             }
 
@@ -214,7 +230,7 @@ export const pushChanges = async (req, res) => {
               user_id: userId,
               voucher_number: voucherNumber,
               provisional_voucher: null, // Clear provisional voucher
-              updatedAt: new Date(transaction.updated_at)
+              updatedAt: new Date(transaction.updatedAt || transaction.updated_at || Date.now())
             });
             await newTransaction.save();
             

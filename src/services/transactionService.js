@@ -2,6 +2,7 @@ import { database } from '../db';
 import { generatePDF } from './exportService';
 import { syncTransactionsToCloud } from './cloudSyncService';
 import deltaSyncService from './deltaSyncService';
+import {generateUUID} from '../utils/uuid';
 
 /**
  * Transaction Processing Service
@@ -51,23 +52,35 @@ class TransactionService {
         const transactionLinesCollection = database.collections.get('transaction_lines');
         const itemsCollection = database.collections.get('items');
 
+        // Generate UUIDs
+        const localId = generateUUID();
+        const idempotencyKey = generateUUID();
+        const provisionalVoucher = `PROV-${localId}`;
+
         // Create transaction
         const transaction = await transactionsCollection.create(txn => {
+          txn.localId = localId;
+          txn.idempotencyKey = idempotencyKey;
+          txn.provisionalVoucher = provisionalVoucher;
+          txn.voucherNumber = null; // Will be set by server
           txn.customerId = null; // Will be set when customer sync returns server ID
           txn.customerName = customerName || 'Walk-in Customer';
           txn.customerMobile = customerMobile || '';
           txn.date = new Date().toISOString();
-          txn.subtotal = totals.subtotal;
-          txn.tax = totals.tax;
-          txn.discount = totals.discount;
-          txn.otherCharges = totals.otherCharges;
-          txn.grandTotal = totals.grandTotal;
-          txn.itemCount = totals.itemCount;
-          txn.unitCount = totals.unitCount;
+          txn.subtotal = totals.subtotal || 0;
+          txn.tax = totals.tax || 0;
+          txn.discount = totals.discount || 0;
+          txn.otherCharges = totals.otherCharges || 0;
+          txn.grandTotal = totals.grandTotal || 0;
+          txn.itemCount = totals.itemCount || 0;
+          txn.unitCount = totals.unitCount || 0;
           txn.paymentType = paymentMode;
           txn.status = 'completed';
           txn.isSynced = false;
+          txn.syncStatus = 'pending';
           txn.syncedAt = null;
+          txn.cloudId = null;
+          txn.userId = null;
         });
 
         transactionId = transaction.id;
@@ -75,23 +88,32 @@ class TransactionService {
         // Create transaction lines and deduct inventory
         savedLines = await Promise.all(
           cartLines.map(async line => {
+            const lineLocalId = generateUUID();
+            const lineIdempotencyKey = generateUUID();
+            
             // Create transaction line
             const txnLine = await transactionLinesCollection.create(tl => {
+              tl.localId = lineLocalId;
+              tl.idempotencyKey = lineIdempotencyKey;
               tl.transactionId = transaction.id;
               tl.itemId = line.itemId;
-              tl.itemName = line.itemName;
-              tl.quantity = line.quantity;
-              tl.unitPrice = line.unitPrice;
-              tl.perLineDiscount = line.perLineDiscount;
-              tl.lineTotal = line.lineTotal;
+              tl.itemName = line.itemName || 'Unknown Item';
+              tl.quantity = line.quantity || 0;
+              tl.unitPrice = line.unitPrice || 0;
+              tl.perLineDiscount = line.perLineDiscount || 0;
+              tl.lineTotal = line.lineTotal || 0;
+              tl.cloudId = null;
+              tl.userId = null;
             });
 
             // Deduct inventory quantity immediately
             try {
               const item = await itemsCollection.find(line.itemId);
               await item.update(i => {
-                i.inventoryQty = Math.max(0, i.inventoryQty - line.quantity);
+                const currentQty = i.inventoryQty || 0;
+                i.inventoryQty = Math.max(0, currentQty - (line.quantity || 0));
                 i.isSynced = false; // Mark for sync
+                i.syncStatus = 'pending';
               });
             } catch (error) {
               console.error(`Failed to deduct inventory for item ${line.itemId}:`, error);

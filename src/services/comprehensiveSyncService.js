@@ -1,9 +1,11 @@
-import { v4 as uuidv4 } from 'uuid';
+import {generateUUID} from '../utils/uuid';
 import NetInfo from '@react-native-community/netinfo';
 import { database } from '../db';
-import enhancedAuthService from './enhancedAuthService';
+import { Q } from '@nozbe/watermelondb';
+import simpleAuthService from './simpleAuthService';
+import {API_CONFIG, API_ENDPOINTS} from '../config/api';
 
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000/api';
+const API_BASE_URL = API_CONFIG.BASE_URL;
 
 class ComprehensiveSyncService {
   constructor() {
@@ -16,7 +18,7 @@ class ComprehensiveSyncService {
   async canSync() {
     const netInfo = await NetInfo.fetch();
     const isOnline = netInfo.isConnected && netInfo.isInternetReachable;
-    const isAuthenticated = enhancedAuthService.isAuthenticated();
+    const isAuthenticated = simpleAuthService.isAuthenticated();
     return isOnline && isAuthenticated;
   }
 
@@ -26,67 +28,74 @@ class ComprehensiveSyncService {
 
   async getUnsyncedData() {
     try {
+      const currentUser = simpleAuthService.getCurrentUser();
+      const currentUserId = currentUser?.id || null;
+      
       const itemsCollection = database.collections.get('items');
       const customersCollection = database.collections.get('customers');
       const transactionsCollection = database.collections.get('transactions');
       const transactionLinesCollection = database.collections.get('transaction_lines');
 
-      const unsyncedItems = await itemsCollection.query()
-        .where('is_synced', false)
-        .fetch();
+      const unsyncedItems = await itemsCollection.query(
+        Q.where('is_synced', false)
+      ).fetch();
 
-      const unsyncedCustomers = await customersCollection.query()
-        .where('is_synced', false)
-        .fetch();
+      const unsyncedCustomers = await customersCollection.query(
+        Q.where('is_synced', false)
+      ).fetch();
 
-      const unsyncedTransactions = await transactionsCollection.query()
-        .where('is_synced', false)
-        .fetch();
+      const unsyncedTransactions = await transactionsCollection.query(
+        Q.where('is_synced', false)
+      ).fetch();
 
       const unsyncedLines = await transactionLinesCollection.query().fetch();
 
       return {
         items: unsyncedItems.map(item => ({
-          id: item.id,
-          cloud_id: item.cloud_id,
+          _id: item.id, // MongoDB expects _id
+          local_id: item.localId,
+          user_id: item.userId || currentUserId, // Use current user if item doesn't have userId
           name: item.name,
           barcode: item.barcode,
           sku: item.sku,
           price: item.price,
           unit: item.unit,
           category: item.category,
-          inventory_qty: item.inventory_qty,
-          updated_at: item.updated_at,
-          idempotency_key: item.idempotency_key || this.generateIdempotencyKey('item', item.id),
+          inventory_qty: item.inventoryQty,
+          recommended: item.recommended,
+          updatedAt: item.updatedAt ? new Date(item.updatedAt).toISOString() : new Date().toISOString(),
+          createdAt: item.createdAt ? new Date(item.createdAt).toISOString() : new Date().toISOString(),
         })),
         customers: unsyncedCustomers.map(customer => ({
-          id: customer.id,
-          cloud_id: customer.cloud_id,
+          _id: customer.id, // MongoDB expects _id
+          local_id: customer.localId,
+          user_id: customer.userId || currentUserId, // Use current user if customer doesn't have userId
           name: customer.name,
           phone: customer.phone,
           email: customer.email,
           address: customer.address,
-          updated_at: customer.updated_at,
-          idempotency_key: customer.idempotency_key || this.generateIdempotencyKey('customer', customer.id),
+          updatedAt: customer.updatedAt ? new Date(customer.updatedAt).toISOString() : new Date().toISOString(),
+          createdAt: customer.createdAt ? new Date(customer.createdAt).toISOString() : new Date().toISOString(),
         })),
         transactions: unsyncedTransactions.map(tx => ({
-          id: tx.id,
-          cloud_id: tx.cloud_id,
-          voucher_number: tx.voucher_number,
-          provisional_voucher: tx.provisional_voucher,
-          customer_id: tx.customer_id,
-          customer_name: tx.customer_name,
-          customer_mobile: tx.customer_mobile,
-          date: tx.date,
+          _id: tx.id, // MongoDB expects _id
+          local_id: tx.localId,
+          user_id: tx.userId || currentUserId, // Use current user if transaction doesn't have userId
+          customer_id: tx.customerId,
+          customer_name: tx.customerName,
+          customer_mobile: tx.customerMobile,
+          date: tx.date ? new Date(tx.date).toISOString() : new Date().toISOString(),
           subtotal: tx.subtotal,
           tax: tx.tax,
           discount: tx.discount,
-          other_charges: tx.other_charges,
-          grand_total: tx.grand_total,
-          payment_type: tx.payment_type,
+          other_charges: tx.otherCharges,
+          grand_total: tx.grandTotal,
+          item_count: tx.itemCount,
+          unit_count: tx.unitCount,
+          payment_type: tx.paymentType,
           status: tx.status,
-          updated_at: tx.updated_at,
-          idempotency_key: tx.idempotency_key || this.generateIdempotencyKey('transaction', tx.id),
+          updatedAt: tx.updatedAt ? new Date(tx.updatedAt).toISOString() : new Date().toISOString(),
+          createdAt: tx.createdAt ? new Date(tx.createdAt).toISOString() : new Date().toISOString(),
         })),
       };
     } catch (error) {
@@ -100,19 +109,26 @@ class ComprehensiveSyncService {
       const unsyncedData = await this.getUnsyncedData();
       const totalItems = unsyncedData.items.length + unsyncedData.customers.length + unsyncedData.transactions.length;
 
+      console.log(`📤 Push: ${totalItems} items to sync (Items: ${unsyncedData.items.length}, Customers: ${unsyncedData.customers.length}, Transactions: ${unsyncedData.transactions.length})`);
+
       if (totalItems === 0) {
+        console.log('✅ No items to sync');
         return { success: true, synced: 0, conflicts: [] };
       }
 
       this.syncProgress = { current: 0, total: totalItems };
 
-      const token = enhancedAuthService.getAuthToken();
+      const currentUser = simpleAuthService.getCurrentUser();
+      console.log(`🔐 User ID for sync: ${currentUser?.id}`);
       
-      const response = await fetch(`${API_BASE_URL}/sync/push`, {
+      const url = `${API_BASE_URL}${API_ENDPOINTS.SYNC_PUSH}`;
+      console.log(`🌐 Sync URL: ${url}`);
+      
+      const response = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
+          'X-User-ID': currentUser.id, // Send user ID in header
         },
         body: JSON.stringify({
           items: unsyncedData.items,
@@ -122,9 +138,13 @@ class ComprehensiveSyncService {
         }),
       });
 
+      console.log(`📊 Response status: ${response.status} ${response.statusText}`);
+      
       const result = await response.json();
+      console.log('📊 Sync result:', JSON.stringify(result, null, 2));
 
       if (response.ok) {
+        console.log('✅ Push successful, marking items as synced');
         await this.markSyncedItems(result);
         
         this.syncProgress.current = totalItems;
@@ -159,9 +179,9 @@ class ComprehensiveSyncService {
 
         if (result.items?.synced) {
           for (const syncedItem of result.items.synced) {
-            const items = await itemsCollection.query()
-              .where('local_id', syncedItem.id)
-              .fetch();
+            const items = await itemsCollection.query(
+              Q.where('local_id', syncedItem.id)
+            ).fetch();
             
             if (items.length > 0) {
               await items[0].update(item => {
@@ -176,9 +196,9 @@ class ComprehensiveSyncService {
 
         if (result.customers?.synced) {
           for (const syncedCustomer of result.customers.synced) {
-            const customers = await customersCollection.query()
-              .where('local_id', syncedCustomer.id)
-              .fetch();
+            const customers = await customersCollection.query(
+              Q.where('local_id', syncedCustomer.id)
+            ).fetch();
             
             if (customers.length > 0) {
               await customers[0].update(customer => {
@@ -193,9 +213,9 @@ class ComprehensiveSyncService {
 
         if (result.transactions?.synced) {
           for (const syncedTx of result.transactions.synced) {
-            const transactions = await transactionsCollection.query()
-              .where('local_id', syncedTx.id)
-              .fetch();
+            const transactions = await transactionsCollection.query(
+              Q.where('local_id', syncedTx.id)
+            ).fetch();
             
             if (transactions.length > 0) {
               await transactions[0].update(tx => {
@@ -223,13 +243,13 @@ class ComprehensiveSyncService {
     try {
       const lastSyncTime = this.lastSyncTime || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-      const token = enhancedAuthService.getAuthToken();
+      const currentUser = simpleAuthService.getCurrentUser();
 
-      const response = await fetch(`${API_BASE_URL}/sync/pull`, {
+      const response = await fetch(`${API_BASE_URL}${API_ENDPOINTS.SYNC_PULL}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
+          'X-User-ID': currentUser.id,
         },
         body: JSON.stringify({
           since: lastSyncTime,
@@ -267,13 +287,13 @@ class ComprehensiveSyncService {
 
         if (serverData.items && serverData.items.length > 0) {
           for (const serverItem of serverData.items) {
-            const existing = await itemsCollection.query()
-              .where('cloud_id', serverItem._id.toString())
-              .fetch();
+            const existing = await itemsCollection.query(
+              Q.where('cloud_id', serverItem._id.toString())
+            ).fetch();
 
             if (existing.length === 0) {
               await itemsCollection.create(item => {
-                item.id = uuidv4();
+                item.id = generateUUID();
                 item.cloud_id = serverItem._id.toString();
                 item.name = serverItem.name;
                 item.barcode = serverItem.barcode;
@@ -295,13 +315,13 @@ class ComprehensiveSyncService {
 
         if (serverData.customers && serverData.customers.length > 0) {
           for (const serverCustomer of serverData.customers) {
-            const existing = await customersCollection.query()
-              .where('cloud_id', serverCustomer._id.toString())
-              .fetch();
+            const existing = await customersCollection.query(
+              Q.where('cloud_id', serverCustomer._id.toString())
+            ).fetch();
 
             if (existing.length === 0) {
               await customersCollection.create(customer => {
-                customer.id = uuidv4();
+                customer.id = generateUUID();
                 customer.cloud_id = serverCustomer._id.toString();
                 customer.name = serverCustomer.name;
                 customer.phone = serverCustomer.phone;
@@ -320,13 +340,13 @@ class ComprehensiveSyncService {
 
         if (serverData.transactions && serverData.transactions.length > 0) {
           for (const serverTx of serverData.transactions) {
-            const existing = await transactionsCollection.query()
-              .where('cloud_id', serverTx._id.toString())
-              .fetch();
+            const existing = await transactionsCollection.query(
+              Q.where('cloud_id', serverTx._id.toString())
+            ).fetch();
 
             if (existing.length === 0) {
               await transactionsCollection.create(tx => {
-                tx.id = uuidv4();
+                tx.id = generateUUID();
                 tx.cloud_id = serverTx._id.toString();
                 tx.voucher_number = serverTx.voucher_number;
                 tx.customer_name = serverTx.customer_name;
@@ -373,7 +393,7 @@ class ComprehensiveSyncService {
         };
       }
 
-      const user = enhancedAuthService.getCurrentUser();
+      const user = simpleAuthService.getCurrentUser();
       if (!user) {
         return { success: false, error: 'User not authenticated' };
       }
@@ -413,15 +433,14 @@ class ComprehensiveSyncService {
         console.warn('⚠️  Sync failed before logout:', syncResult.error);
       }
 
-      const logoutResult = await enhancedAuthService.logout();
-      
+      // No logout needed with simple auth - data persists
       return {
-        success: logoutResult.success,
+        success: syncResult.success,
         syncResult,
-        message: logoutResult.success ? 'Synced and logged out successfully' : 'Logout failed'
+        message: syncResult.success ? 'Data synced successfully' : 'Sync failed'
       };
     } catch (error) {
-      console.error('Sync and logout error:', error);
+      console.error('Sync error:', error);
       return { success: false, error: error.message };
     }
   }

@@ -16,6 +16,7 @@ import {useCart} from '../context/CartContext';
 import {database} from '../db';
 import {Q} from '@nozbe/watermelondb';
 import customerService from '../services/customerService';
+import {generateUUID} from '../utils/uuid';
 
 export default function PaymentModeScreen({route, navigation}) {
   const {cartTotal, cartLines, totals, taxPercent, discount, otherCharges} = route.params || {};
@@ -77,13 +78,7 @@ export default function PaymentModeScreen({route, navigation}) {
     }
 
     setSelectedPaymentMode(mode);
-    
-    // Show generate sell button for cash payment
-    if (mode.id === 'cash') {
-      setShowGenerateSell(true);
-    } else {
-      setShowGenerateSell(false);
-    }
+    setShowGenerateSell(true); // Show generate sell button for all payment modes
   };
 
   const handleGenerateSell = async () => {
@@ -293,14 +288,23 @@ export default function PaymentModeScreen({route, navigation}) {
               if (customerEmail) c.email = customerEmail;
               if (customerAddress) c.address = customerAddress;
               c.isSynced = false;
+              c.syncStatus = 'pending';
             });
           } else {
+            const localId = generateUUID();
+            const idempotencyKey = generateUUID();
+            
             customer = await customersCollection.create(c => {
+              c.localId = localId;
+              c.idempotencyKey = idempotencyKey;
               c.phone = customerMobile || '';
               c.name = customerName || 'Customer';
               c.email = customerEmail || '';
               c.address = customerAddress || '';
               c.isSynced = false;
+              c.syncStatus = 'pending';
+              c.cloudId = null;
+              c.userId = null;
             });
           }
         });
@@ -366,21 +370,18 @@ export default function PaymentModeScreen({route, navigation}) {
           {/* Customer Suggestions */}
           {showSuggestions && customerSuggestions.length > 0 && (
             <View style={styles.suggestionsContainer}>
-              <FlatList
-                data={customerSuggestions}
-                keyExtractor={item => item.id}
-                renderItem={({item}) => (
-                  <TouchableOpacity
-                    style={styles.suggestionItem}
-                    onPress={() => selectCustomer(item)}>
-                    <View style={styles.suggestionContent}>
-                      <Text style={styles.suggestionName}>{item.name}</Text>
-                      <Text style={styles.suggestionPhone}>{item.phone}</Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={20} color="#999" />
-                  </TouchableOpacity>
-                )}
-              />
+              {customerSuggestions.map((item) => (
+                <TouchableOpacity
+                  key={item.id}
+                  style={styles.suggestionItem}
+                  onPress={() => selectCustomer(item)}>
+                  <View style={styles.suggestionContent}>
+                    <Text style={styles.suggestionName}>{item.name}</Text>
+                    <Text style={styles.suggestionPhone}>{item.phone}</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={20} color="#999" />
+                </TouchableOpacity>
+              ))}
             </View>
           )}
 

@@ -229,34 +229,54 @@ class CustomerService {
 
       let customer;
       
-      if (localId) {
-        // Update existing customer
-        customer = await customersCollection.find(localId);
-        await customer.update(record => {
-          record.name = name;
-          record.phone = phone;
-          record.email = email;
-          record.address = address;
-          record.isSynced = false;
-          record.updatedAt = new Date().toISOString();
-        });
-      } else {
-        // Create new customer
-        const { v4: uuidv4 } = require('uuid');
-        customer = await customersCollection.create(record => {
-          record.localId = uuidv4();
-          record.cloudId = null;
-          record.userId = customerData.userId;
-          record.name = name;
-          record.phone = phone;
-          record.email = email;
-          record.address = address;
-          record.isSynced = false;
-          record.syncedAt = null;
-          record.updatedAt = new Date().toISOString();
-          record.idempotencyKey = `customer-${record.localId}-${Date.now()}`;
-        });
-      }
+      await database.write(async () => {
+        if (localId) {
+          // Update existing customer - check if it exists first
+          try {
+            customer = await customersCollection.find(localId);
+            await customer.update(record => {
+              record.name = name;
+              record.phone = phone;
+              record.email = email;
+              record.address = address;
+              record.isSynced = false;
+              // updatedAt is readonly and auto-managed by WatermelonDB
+            });
+          } catch (findError) {
+            // Customer not found, create new one
+            const { generateUUID } = require('../utils/uuid');
+            customer = await customersCollection.create(record => {
+              record.localId = generateUUID();
+              record.cloudId = null;
+              record.userId = customerData.userId;
+              record.name = name;
+              record.phone = phone;
+              record.email = email;
+              record.address = address;
+              record.isSynced = false;
+              record.syncedAt = null;
+              // updatedAt and createdAt are readonly and auto-managed by WatermelonDB
+              record.idempotencyKey = `customer-${record.localId}-${Date.now()}`;
+            });
+          }
+        } else {
+          // Create new customer
+          const { generateUUID } = require('../utils/uuid');
+          customer = await customersCollection.create(record => {
+            record.localId = generateUUID();
+            record.cloudId = null;
+            record.userId = customerData.userId;
+            record.name = name;
+            record.phone = phone;
+            record.email = email;
+            record.address = address;
+            record.isSynced = false;
+            record.syncedAt = null;
+            // updatedAt and createdAt are readonly and auto-managed by WatermelonDB
+            record.idempotencyKey = `customer-${record.localId}-${Date.now()}`;
+          });
+        }
+      });
 
       // Clear search cache for this customer
       this.clearSearchCache();

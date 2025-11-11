@@ -12,6 +12,8 @@ import {
 } from 'react-native';
 import {database} from '../db';
 import {syncItemsToCloud} from '../services/cloudSyncService';
+import {generateUUID} from '../utils/uuid';
+import simpleAuthService from '../services/simpleAuthService';
 
 export default function ItemsScreen() {
   const [items, setItems] = useState([]);
@@ -56,34 +58,52 @@ export default function ItemsScreen() {
     }
 
     try {
+      const price = parseFloat(formData.price);
+      if (isNaN(price) || price < 0) {
+        Alert.alert('Error', 'Please enter a valid price');
+        return;
+      }
+
       await database.write(async () => {
         const itemsCollection = database.collections.get('items');
         
         if (editingItem) {
           await editingItem.update(item => {
-            item.name = formData.name;
-            item.category = formData.category;
-            item.unit = formData.unit;
-            item.price = parseFloat(formData.price);
-            item.costPrice = formData.costPrice ? parseFloat(formData.costPrice) : null;
-            item.mrp = formData.mrp ? parseFloat(formData.mrp) : null;
-            item.minStock = formData.minStock ? parseInt(formData.minStock) : null;
+            item.name = formData.name.trim();
+            item.category = formData.category.trim();
+            item.unit = formData.unit || 'piece';
+            item.price = price;
+            item.costPrice = formData.costPrice ? parseFloat(formData.costPrice) : 0;
+            item.mrp = formData.mrp ? parseFloat(formData.mrp) : 0;
+            item.minStock = formData.minStock ? parseInt(formData.minStock) : 0;
             item.inventoryQty = formData.currentStock ? parseInt(formData.currentStock) : 0;
             item.recommended = item.recommended || false;
+            item.defaultQuantity = 1;
             item.isSynced = false;
+            item.syncStatus = 'pending';
           });
         } else {
+          const localId = generateUUID();
+          const idempotencyKey = generateUUID();
+          const currentUser = simpleAuthService.getCurrentUser();
+          
           await itemsCollection.create(item => {
-            item.name = formData.name;
-            item.category = formData.category;
-            item.unit = formData.unit;
-            item.price = parseFloat(formData.price);
-            item.costPrice = formData.costPrice ? parseFloat(formData.costPrice) : null;
-            item.mrp = formData.mrp ? parseFloat(formData.mrp) : null;
-            item.minStock = formData.minStock ? parseInt(formData.minStock) : null;
+            item.localId = localId;
+            item.idempotencyKey = idempotencyKey;
+            item.name = formData.name.trim();
+            item.category = formData.category.trim();
+            item.unit = formData.unit || 'piece';
+            item.price = price;
+            item.costPrice = formData.costPrice ? parseFloat(formData.costPrice) : 0;
+            item.mrp = formData.mrp ? parseFloat(formData.mrp) : 0;
+            item.minStock = formData.minStock ? parseInt(formData.minStock) : 0;
             item.inventoryQty = formData.currentStock ? parseInt(formData.currentStock) : 0;
             item.recommended = false;
+            item.defaultQuantity = 1;
             item.isSynced = false;
+            item.syncStatus = 'pending';
+            item.cloudId = null;
+            item.userId = currentUser?.id || null;
           });
         }
       });
@@ -92,10 +112,11 @@ export default function ItemsScreen() {
       Alert.alert('Success', editingItem ? 'Item updated' : 'Item created');
       
       // Sync to cloud in background
-      syncItemsToCloud().catch(err => console.log('Sync skipped:', err));
+      syncItemsToCloud().catch(err => console.log('Sync skipped:', err.message));
     } catch (error) {
       console.error('Error saving item:', error);
-      Alert.alert('Error', 'Failed to save item');
+      console.error('Error stack:', error.stack);
+      Alert.alert('Error', `Failed to save item: ${error.message}`);
     }
   };
 

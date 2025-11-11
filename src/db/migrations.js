@@ -119,5 +119,13 @@ export default schemaMigrations({
         }),
       ],
     },
+    // Migration from version 7 to 8 (schema cleanup for simplified auth)
+    {
+      toVersion: 8,
+      steps: [
+        // No structural changes needed - just version bump for fresh start
+        // All required fields already exist from previous migrations
+      ],
+    },
   ],
 });

@@ -7,7 +7,7 @@ import {Ionicons} from '@expo/vector-icons';
 import enhancedReportsService from '../services/enhancedReportsService';
 
 // Separate component for sale items to properly use hooks
-function SaleItem({item, index, isExpanded, onToggle}) {
+function SaleItem({item, index, isExpanded, onToggle, onDelete}) {
   const [transactionLines, setTransactionLines] = useState([]);
   
   useEffect(() => {
@@ -117,7 +117,18 @@ function SaleItem({item, index, isExpanded, onToggle}) {
         <View style={styles.statusBadge}>
           <Text style={styles.statusText}>✓ Completed</Text>
         </View>
-        <Text style={styles.expandHint}>{isExpanded ? '▲ Less' : '▼ More'}</Text>
+        <View style={styles.actionButtons}>
+          <TouchableOpacity 
+            style={styles.deleteButton}
+            onPress={(e) => {
+              e.stopPropagation();
+              onDelete(item);
+            }}
+          >
+            <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+          </TouchableOpacity>
+          <Text style={styles.expandHint}>{isExpanded ? '▲ Less' : '▼ More'}</Text>
+        </View>
       </View>
     </TouchableOpacity>
   );
@@ -189,6 +200,47 @@ export default function ReportsScreen() {
     setExpandedSale(expandedSale === id ? null : id);
   };
 
+  const handleDeleteTransaction = async (transaction) => {
+    Alert.alert(
+      'Delete Transaction',
+      `Are you sure you want to delete this transaction? This action cannot be undone.\n\nAmount: ${formatCurrency(transaction.grandTotal)}`,
+      [
+        {text: 'Cancel', style: 'cancel'},
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await database.write(async () => {
+                // Delete transaction lines first
+                const linesCollection = database.collections.get('transaction_lines');
+                const lines = await linesCollection
+                  .query(Q.where('transaction_id', transaction.id))
+                  .fetch();
+                
+                for (const line of lines) {
+                  await line.markAsDeleted();
+                }
+                
+                // Delete the transaction
+                await transaction.markAsDeleted();
+              });
+              
+              // Reload data
+              await loadTodaySales();
+              await loadComprehensiveReport();
+              
+              Alert.alert('Success', 'Transaction deleted successfully');
+            } catch (error) {
+              console.error('Error deleting transaction:', error);
+              Alert.alert('Error', 'Failed to delete transaction');
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const loadComprehensiveReport = async () => {
     try {
       const startDate = new Date();
@@ -246,8 +298,110 @@ export default function ReportsScreen() {
   };
 
   const renderSaleItem = ({item, index}) => {
-    return <SaleItem item={item} index={index} isExpanded={expandedSale === item.id} onToggle={() => toggleExpanded(item.id)} />;
+    return (
+      <SaleItem 
+        item={item} 
+        index={index} 
+        isExpanded={expandedSale === item.id} 
+        onToggle={() => toggleExpanded(item.id)}
+        onDelete={handleDeleteTransaction}
+      />
+    );
   };
+
+  const renderHeader = () => (
+    <>
+      {/* Sync Status Card */}
+      {syncStatus && (
+        <View style={[styles.syncCard, { borderLeftColor: getSyncStatusColor() }]}>
+          <View style={styles.syncHeader}>
+            <Ionicons name={getSyncStatusIcon()} size={20} color={getSyncStatusColor()} />
+            <Text style={styles.syncTitle}>Sync Status</Text>
+          </View>
+          <Text style={styles.syncText}>
+            {syncStatus.status === 'synced' && 'All data synced to cloud'}
+            {syncStatus.status === 'pending_sync' && `${syncStatus.pendingChanges} changes pending sync`}
+            {syncStatus.status === 'offline' && 'Working offline'}
+            {syncStatus.status === 'sync_failed' && 'Sync failed - check connection'}
+          </Text>
+          {syncStatus.lastSync && (
+            <Text style={styles.syncTime}>Last sync: {new Date(syncStatus.lastSync).toLocaleTimeString()}</Text>
+          )}
+        </View>
+      )}
+
+      {/* Comprehensive Report Summary */}
+      {comprehensiveReport && (
+        <View style={styles.comprehensiveCard}>
+          <View style={styles.cardHeader}>
+            <Ionicons name="stats-chart" size={24} color="#6B46C1" />
+            <Text style={styles.cardTitle}>Comprehensive Report</Text>
+          </View>
+          
+          <View style={styles.reportGrid}>
+            <View style={styles.reportItem}>
+              <Text style={styles.reportLabel}>Total Revenue</Text>
+              <Text style={styles.reportValue}>{formatCurrency(comprehensiveReport.summary.totalRevenue)}</Text>
+            </View>
+            <View style={styles.reportItem}>
+              <Text style={styles.reportLabel}>Transactions</Text>
+              <Text style={styles.reportValue}>{comprehensiveReport.summary.totalTransactions}</Text>
+            </View>
+            <View style={styles.reportItem}>
+              <Text style={styles.reportLabel}>Items Sold</Text>
+              <Text style={styles.reportValue}>{comprehensiveReport.summary.totalItems}</Text>
+            </View>
+            <View style={styles.reportItem}>
+              <Text style={styles.reportLabel}>Avg Transaction</Text>
+              <Text style={styles.reportValue}>{formatCurrency(comprehensiveReport.summary.averageTransactionValue)}</Text>
+            </View>
+          </View>
+
+          {/* Sync Confirmation */}
+          {comprehensiveReport.syncConfirmation && (
+            <View style={styles.syncConfirmation}>
+              <Text style={styles.syncConfirmationTitle}>Data Sync Analysis</Text>
+              <Text style={styles.syncConfirmationText}>
+                {comprehensiveReport.syncConfirmation.totalDiscrepancies === 0 
+                  ? '✓ No discrepancies found between local and cloud data'
+                  : `⚠ ${comprehensiveReport.syncConfirmation.totalDiscrepancies} discrepancies found`
+                }
+              </Text>
+              {comprehensiveReport.syncConfirmation.localOnly.length > 0 && (
+                <Text style={styles.syncDetail}>
+                  {comprehensiveReport.syncConfirmation.localOnly.length} transactions only in local database
+                </Text>
+              )}
+              {comprehensiveReport.syncConfirmation.cloudOnly.length > 0 && (
+                <Text style={styles.syncDetail}>
+                  {comprehensiveReport.syncConfirmation.cloudOnly.length} transactions only in cloud
+                </Text>
+              )}
+            </View>
+          )}
+        </View>
+      )}
+
+      {/* Basic Summary Card */}
+      <View style={styles.summaryCard}>
+        <View style={styles.summaryHeader}>
+          <Ionicons name="trending-up" size={24} color="#FFFFFF" />
+          <Text style={styles.summaryLabel}>Today's Total Sales</Text>
+        </View>
+        <Text style={styles.summaryAmount}>{formatCurrency(todayTotal)}</Text>
+        <View style={styles.summaryStats}>
+          <View style={styles.statItem}>
+            <Ionicons name="receipt" size={16} color="rgba(255,255,255,0.8)" />
+            <Text style={styles.statText}>{todaySales.length} transactions</Text>
+          </View>
+          <View style={styles.statItem}>
+            <Ionicons name="time" size={16} color="rgba(255,255,255,0.8)" />
+            <Text style={styles.statText}>Last updated: {new Date().toLocaleTimeString()}</Text>
+          </View>
+        </View>
+      </View>
+    </>
+  );
 
   return (
     <View style={styles.container}>
@@ -266,100 +420,9 @@ export default function ReportsScreen() {
         </View>
       </View>
 
-      <ScrollView style={styles.scrollContainer}>
-        {/* Sync Status Card */}
-        {syncStatus && (
-          <View style={[styles.syncCard, { borderLeftColor: getSyncStatusColor() }]}>
-            <View style={styles.syncHeader}>
-              <Ionicons name={getSyncStatusIcon()} size={20} color={getSyncStatusColor()} />
-              <Text style={styles.syncTitle}>Sync Status</Text>
-            </View>
-            <Text style={styles.syncText}>
-              {syncStatus.status === 'synced' && 'All data synced to cloud'}
-              {syncStatus.status === 'pending_sync' && `${syncStatus.pendingChanges} changes pending sync`}
-              {syncStatus.status === 'offline' && 'Working offline'}
-              {syncStatus.status === 'sync_failed' && 'Sync failed - check connection'}
-            </Text>
-            {syncStatus.lastSync && (
-              <Text style={styles.syncTime}>Last sync: {new Date(syncStatus.lastSync).toLocaleTimeString()}</Text>
-            )}
-          </View>
-        )}
-
-        {/* Comprehensive Report Summary */}
-        {comprehensiveReport && (
-          <View style={styles.comprehensiveCard}>
-            <View style={styles.cardHeader}>
-              <Ionicons name="stats-chart" size={24} color="#6B46C1" />
-              <Text style={styles.cardTitle}>Comprehensive Report</Text>
-            </View>
-            
-            <View style={styles.reportGrid}>
-              <View style={styles.reportItem}>
-                <Text style={styles.reportLabel}>Total Revenue</Text>
-                <Text style={styles.reportValue}>{formatCurrency(comprehensiveReport.summary.totalRevenue)}</Text>
-              </View>
-              <View style={styles.reportItem}>
-                <Text style={styles.reportLabel}>Transactions</Text>
-                <Text style={styles.reportValue}>{comprehensiveReport.summary.totalTransactions}</Text>
-              </View>
-              <View style={styles.reportItem}>
-                <Text style={styles.reportLabel}>Items Sold</Text>
-                <Text style={styles.reportValue}>{comprehensiveReport.summary.totalItems}</Text>
-              </View>
-              <View style={styles.reportItem}>
-                <Text style={styles.reportLabel}>Avg Transaction</Text>
-                <Text style={styles.reportValue}>{formatCurrency(comprehensiveReport.summary.averageTransactionValue)}</Text>
-              </View>
-            </View>
-
-            {/* Sync Confirmation */}
-            {comprehensiveReport.syncConfirmation && (
-              <View style={styles.syncConfirmation}>
-                <Text style={styles.syncConfirmationTitle}>Data Sync Analysis</Text>
-                <Text style={styles.syncConfirmationText}>
-                  {comprehensiveReport.syncConfirmation.totalDiscrepancies === 0 
-                    ? '✓ No discrepancies found between local and cloud data'
-                    : `⚠ ${comprehensiveReport.syncConfirmation.totalDiscrepancies} discrepancies found`
-                  }
-                </Text>
-                {comprehensiveReport.syncConfirmation.localOnly.length > 0 && (
-                  <Text style={styles.syncDetail}>
-                    {comprehensiveReport.syncConfirmation.localOnly.length} transactions only in local database
-                  </Text>
-                )}
-                {comprehensiveReport.syncConfirmation.cloudOnly.length > 0 && (
-                  <Text style={styles.syncDetail}>
-                    {comprehensiveReport.syncConfirmation.cloudOnly.length} transactions only in cloud
-                  </Text>
-                )}
-              </View>
-            )}
-          </View>
-        )}
-
-        {/* Basic Summary Card */}
-        <View style={styles.summaryCard}>
-          <View style={styles.summaryHeader}>
-            <Ionicons name="trending-up" size={24} color="#FFFFFF" />
-            <Text style={styles.summaryLabel}>Today's Total Sales</Text>
-          </View>
-          <Text style={styles.summaryAmount}>{formatCurrency(todayTotal)}</Text>
-          <View style={styles.summaryStats}>
-            <View style={styles.statItem}>
-              <Ionicons name="receipt" size={16} color="rgba(255,255,255,0.8)" />
-              <Text style={styles.statText}>{todaySales.length} transactions</Text>
-            </View>
-            <View style={styles.statItem}>
-              <Ionicons name="time" size={16} color="rgba(255,255,255,0.8)" />
-              <Text style={styles.statText}>Last updated: {new Date().toLocaleTimeString()}</Text>
-            </View>
-          </View>
-        </View>
-      </ScrollView>
-
       {isLoading ? (
         <View style={styles.emptyContainer}>
+          <ActivityIndicator size="large" color="#6B46C1" />
           <Text style={styles.emptyText}>Loading...</Text>
         </View>
       ) : todaySales.length === 0 ? (
@@ -373,6 +436,7 @@ export default function ReportsScreen() {
           data={todaySales}
           renderItem={renderSaleItem}
           keyExtractor={item => item.id}
+          ListHeaderComponent={renderHeader}
           contentContainerStyle={styles.listContainer}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#6B46C1']} />
@@ -635,6 +699,16 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#155724',
     fontWeight: '600',
+  },
+  actionButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  deleteButton: {
+    padding: 8,
+    borderRadius: 8,
+    backgroundColor: '#FFF5F5',
   },
   expandHint: {
     fontSize: 11,

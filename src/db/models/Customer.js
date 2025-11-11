@@ -1,5 +1,5 @@
 import {Model} from '@nozbe/watermelondb';
-import {field, date} from '@nozbe/watermelondb/decorators';
+import {field, date, readonly} from '@nozbe/watermelondb/decorators';
 
 export default class Customer extends Model {
   static table = 'customers';
@@ -14,6 +14,9 @@ export default class Customer extends Model {
   @field('is_synced') isSynced;
   @field('synced_at') syncedAt;
   @field('idempotency_key') idempotencyKey;
-  @date('created_at') createdAt;
-  @date('updated_at') updatedAt;
+  @field('sync_status') syncStatus;
+  @field('sync_error') syncError;
+  @field('last_sync_attempt') lastSyncAttempt;
+  @readonly @date('created_at') createdAt;
+  @readonly @date('updated_at') updatedAt;
 }

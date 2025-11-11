@@ -29,6 +29,9 @@ export default class Transaction extends Model {
   @field('is_synced') isSynced;
   @field('synced_at') syncedAt;
   @field('idempotency_key') idempotencyKey;
+  @field('sync_status') syncStatus;
+  @field('sync_error') syncError;
+  @field('last_sync_attempt') lastSyncAttempt;
   @readonly @date('created_at') createdAt;
   @readonly @date('updated_at') updatedAt;
 

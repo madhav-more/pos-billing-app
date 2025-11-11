@@ -1,7 +1,7 @@
 import React, {useState, useEffect} from 'react';
 import {View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator} from 'react-native';
 import {database} from '../db';
-import enhancedAuthService from '../services/enhancedAuthService';
+import simpleAuthService from '../services/simpleAuthService';
 import comprehensiveSyncService from '../services/comprehensiveSyncService';
 
 export default function EnhancedSettingsScreen({navigation, onLogout}) {
@@ -23,16 +23,15 @@ export default function EnhancedSettingsScreen({navigation, onLogout}) {
 
   const loadUserInfo = async () => {
     try {
-      const currentUser = enhancedAuthService.getCurrentUser();
+      const currentUser = simpleAuthService.getCurrentUser();
       const settingsCollection = database.collections.get('settings');
       const settings = await settingsCollection.query().fetch();
 
       const name = currentUser?.name || settings.find(s => s.key === 'ownerName')?.value || 'User';
-      const email = currentUser?.email || settings.find(s => s.key === 'userEmail')?.value || '';
-      const shopName = settings.find(s => s.key === 'shopName')?.value || 'G.U.R.U Store';
-      const location = settings.find(s => s.key === 'location')?.value || '';
-      const authStatus = enhancedAuthService.getAuthStatus();
-      const authMode = authStatus.authenticated ? 'cloud' : 'local';
+      const email = currentUser?.email || '';
+      const shopName = currentUser?.companyName || settings.find(s => s.key === 'shopName')?.value || 'G.U.R.U Store';
+      const location = currentUser?.location || settings.find(s => s.key === 'location')?.value || '';
+      const authMode = 'local';
 
       setUserInfo({name, email, shopName, location, authMode});
       setLastSyncTime(new Date().toLocaleTimeString());
@@ -76,66 +75,39 @@ export default function EnhancedSettingsScreen({navigation, onLogout}) {
     }
   };
 
-  const handleSyncAndLogout = () => {
+
+  const handleDeleteAccount = () => {
     Alert.alert(
-      'Sync & Logout',
-      'This will sync all your data with the cloud before logging out. Continue?',
+      'Delete Account',
+      'This will permanently delete your account and ALL data (items, customers, transactions, reports). This action cannot be undone. Are you sure?',
       [
         {text: 'Cancel', style: 'cancel'},
         {
-          text: 'Sync & Logout',
+          text: 'Delete Everything',
           style: 'destructive',
           onPress: async () => {
-            setIsSyncing(true);
-            setSyncStatus('Syncing before logout...');
-
             try {
-              const result = await comprehensiveSyncService.syncAndLogout();
+              setIsSyncing(true);
+              setSyncStatus('Deleting all data...');
+              
+              const result = await simpleAuthService.deleteAccount();
               
               if (result.success) {
-                setSyncStatus('✅ Synced and logged out successfully!');
-                
-                setTimeout(() => {
-                  if (onLogout) {
-                    onLogout();
-                  }
-                }, 1000);
+                Alert.alert('Account Deleted', 'All data has been removed', [
+                  {text: 'OK', onPress: () => {
+                    if (onLogout) {
+                      onLogout();
+                    }
+                  }}
+                ]);
               } else {
-                setSyncStatus(`Sync error: ${result.syncResult?.error || result.error}`);
-                Alert.alert('Warning', 'Logout attempted despite sync error. Please try again.');
+                Alert.alert('Error', result.error || 'Failed to delete account');
               }
             } catch (error) {
-              console.error('Sync and logout error:', error);
-              setSyncStatus('Error during sync and logout');
-              Alert.alert('Error', 'An error occurred. Please try again.');
+              console.error('Delete account error:', error);
+              Alert.alert('Error', error.message || 'Failed to delete account');
             } finally {
               setIsSyncing(false);
-            }
-          }
-        }
-      ]
-    );
-  };
-
-  const handleLogout = () => {
-    Alert.alert(
-      'Logout',
-      'Are you sure you want to logout without syncing?',
-      [
-        {text: 'Cancel', style: 'cancel'},
-        {
-          text: 'Logout',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await enhancedAuthService.logout();
-              
-              if (onLogout) {
-                onLogout();
-              }
-            } catch (error) {
-              console.error('Logout error:', error);
-              Alert.alert('Error', error.message || 'Failed to logout');
             }
           },
         }
@@ -211,30 +183,19 @@ export default function EnhancedSettingsScreen({navigation, onLogout}) {
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Account</Text>
+          <Text style={styles.sectionTitle}>Danger Zone</Text>
 
           <TouchableOpacity 
-            style={styles.syncLogoutButton} 
-            onPress={handleSyncAndLogout}
+            style={styles.deleteButton} 
+            onPress={handleDeleteAccount}
             disabled={isSyncing}
           >
-            {isSyncing ? (
-              <>
-                <ActivityIndicator color="#FFFFFF" size="small" />
-                <Text style={styles.syncLogoutButtonText}>Syncing...</Text>
-              </>
-            ) : (
-              <Text style={styles.syncLogoutButtonText}>☁️ Sync & Logout</Text>
-            )}
+            <Text style={styles.deleteButtonText}>🗑️ Delete Account & All Data</Text>
           </TouchableOpacity>
-
-          <TouchableOpacity 
-            style={styles.logoutButton} 
-            onPress={handleLogout}
-            disabled={isSyncing}
-          >
-            <Text style={styles.logoutButtonText}>Logout (without sync)</Text>
-          </TouchableOpacity>
+          
+          <Text style={styles.warningText}>
+            Deleting your account will permanently remove all items, customers, transactions, and reports from this device.
+          </Text>
         </View>
 
         <View style={styles.section}>
@@ -394,16 +355,23 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginLeft: 6,
   },
-  logoutButton: {
+  deleteButton: {
     backgroundColor: '#FF3B30',
     padding: 14,
     borderRadius: 8,
     alignItems: 'center',
   },
-  logoutButtonText: {
+  deleteButtonText: {
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '600',
+  },
+  warningText: {
+    fontSize: 12,
+    color: '#999',
+    marginTop: 12,
+    textAlign: 'center',
+    paddingHorizontal: 16,
   },
   disabledButton: {
     opacity: 0.6,

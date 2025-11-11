@@ -1,10 +1,11 @@
 import express from 'express';
 import { pullChanges, pushChanges } from '../controllers/syncController.js';
-import { authenticateToken } from '../middleware/auth.js';
+import { flexibleAuth } from '../middleware/flexibleAuth.js';
 
 const router = express.Router();
 
-router.use(authenticateToken);
+// Use flexible auth to support both JWT and simple user ID
+router.use(flexibleAuth);
 
 router.post('/pull', pullChanges);
 router.post('/push', pushChanges);

@@ -10,19 +10,30 @@ import Setting from './models/Setting';
 import AuditLog from './models/AuditLog';
 import SyncQueue from './models/SyncQueue';
 
-const adapter = new SQLiteAdapter({
-  schema,
-  migrations,
-  dbName: 'GuruPOS',
-  jsi: true,
-  onSetUpError: error => {
-    console.error('Database setup error:', error);
-  },
-});
+let adapter;
+let database;
 
-export const database = new Database({
-  adapter,
-  modelClasses: [Item, Customer, Transaction, TransactionLine, Setting, AuditLog, SyncQueue],
-});
+try {
+  adapter = new SQLiteAdapter({
+    schema,
+    migrations,
+    dbName: 'GuruPOS',
+    jsi: false, // Disable JSI for better compatibility
+    onSetUpError: error => {
+      console.error('❌ Database setup error:', error);
+      console.error('Error details:', error.message);
+    },
+  });
 
-export {Item, Customer, Transaction, TransactionLine, Setting, AuditLog, SyncQueue};
+  database = new Database({
+    adapter,
+    modelClasses: [Item, Customer, Transaction, TransactionLine, Setting, AuditLog, SyncQueue],
+  });
+  
+  console.log('✅ Database initialized successfully');
+} catch (error) {
+  console.error('❌ Fatal database initialization error:', error);
+  throw error;
+}
+
+export {database, Item, Customer, Transaction, TransactionLine, Setting, AuditLog, SyncQueue};

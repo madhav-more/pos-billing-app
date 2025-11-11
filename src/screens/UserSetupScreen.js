@@ -11,7 +11,7 @@ import {
   Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import userProfileService from '../services/userProfileService';
+import simpleAuthService from '../services/simpleAuthService';
 
 export default function UserSetupScreen({ onSetupComplete }) {
   const [name, setName] = useState('');
@@ -22,23 +22,22 @@ export default function UserSetupScreen({ onSetupComplete }) {
   const [isLoading, setIsLoading] = useState(false);
 
   const handleSaveProfile = async () => {
-    if (!email || !email.includes('@')) {
-      Alert.alert('Error', 'Please enter a valid email address');
-      return;
-    }
-
     if (!name) {
       Alert.alert('Error', 'Please enter your name');
       return;
     }
 
+    if (!shopName) {
+      Alert.alert('Error', 'Please enter your company/shop name');
+      return;
+    }
+
     setIsLoading(true);
     try {
-      const result = await userProfileService.saveProfile({
+      const result = await simpleAuthService.createUserProfile({
         name,
         email: email.toLowerCase().trim(),
-        shopName,
-        phone,
+        companyName: shopName,
         location,
       });
 

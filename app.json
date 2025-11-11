@@ -21,10 +21,19 @@
     },
     "android": {
       "package": "com.guru.pos",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#6B46C1"
+      },
       "permissions": [
         "CAMERA",
         "WRITE_EXTERNAL_STORAGE",
-        "READ_EXTERNAL_STORAGE"
+        "READ_EXTERNAL_STORAGE",
+        "INTERNET",
+        "ACCESS_NETWORK_STATE",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {
@@ -37,6 +46,11 @@
           "cameraPermission": "Allow $(PRODUCT_NAME) to access camera to scan barcodes."
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "1b4440c1-9e2e-4e80-b477-997249ba72f4"
+      }
+    }
   }
 }

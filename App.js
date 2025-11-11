@@ -11,13 +11,12 @@ import {database} from './src/db';
 import {seedDatabase} from './src/db/seed-script';
 import {CartProvider} from './src/context/CartContext';
 import {autoSync} from './src/services/cloudSyncService';
-import userProfileService from './src/services/userProfileService';
+import simpleAuthService from './src/services/simpleAuthService';
 import syncManager from './src/services/syncManager';
 
 // Screens
 import SplashScreen from './src/screens/SplashScreen';
-import OnboardingScreen from './src/screens/OnboardingScreen';
-import UserSetupScreen from './src/screens/UserSetupScreen';
+import SimpleLoginScreen from './src/screens/SimpleLoginScreen';
 import HomeScreen from './src/screens/HomeScreen';
 import ScannerScreen from './src/screens/ImprovedScannerScreen';
 import CounterScreen from './src/screens/CounterScreen';
@@ -52,7 +51,6 @@ function MainTabs({onLogout}) {
 
 function App() {
   const [isLoading, setIsLoading] = useState(true);
-  const [isOnboarded, setIsOnboarded] = useState(false);
   const [hasUserProfile, setHasUserProfile] = useState(false);
   const [user, setUser] = useState(null);
   const [forceRefresh, setForceRefresh] = useState(0);
@@ -74,59 +72,34 @@ function App() {
   const initializeApp = async () => {
     try {
       // Check if user profile exists
-      const profileState = await userProfileService.initialize();
+      const profileState = await simpleAuthService.initialize();
       console.log('🚀 App initialization - Has profile:', profileState.hasUser);
       setHasUserProfile(profileState.hasUser);
       setUser(profileState.user);
       
-      const settingsCollection = database.collections.get('settings');
-      const itemsCollection = database.collections.get('items');
-      
-      const settings = await settingsCollection.query().fetch();
-      const items = await itemsCollection.query().fetch();
-
-      // Only seed if database is completely empty
-      if (settings.length === 0 && items.length === 0) {
-        console.log('Database empty, seeding...');
-        await seedDatabase();
-        // Re-fetch after seeding
-        const updatedSettings = await settingsCollection.query().fetch();
-        const onboardingSetting = updatedSettings.find(s => s.key === 'hasOnboarded');
-        setIsOnboarded(onboardingSetting?.value === 'true');
-      } else {
-        // Database has data - assume onboarding is done
-        console.log('Database has data, items:', items.length, 'settings:', settings.length);
-        const onboardingSetting = settings.find(s => s.key === 'hasOnboarded');
-        // If data exists but no onboarding flag, set it as onboarded
-        const isOnboardedValue = onboardingSetting?.value === 'true' || items.length > 0;
-        console.log('✅ Setting onboarded:', isOnboardedValue);
-        setIsOnboarded(isOnboardedValue);
+      // Seed database if needed (only on first run)
+      if (profileState.hasUser) {
+        const itemsCollection = database.collections.get('items');
+        const items = await itemsCollection.query().fetch();
+        
+        if (items.length === 0) {
+          console.log('📦 Seeding initial items...');
+          await seedDatabase();
+        }
       }
       
-      // End loading immediately - don't wait for sync
-      console.log('⏱️ Setting isLoading to false, hasUserProfile:', profileState.hasUser);
+      // End loading
       setIsLoading(false);
 
       // Auto-sync with cloud in background (non-blocking)
       if (profileState.hasUser) {
         setTimeout(() => {
           autoSync().catch(err => console.log('Auto-sync skipped:', err.message));
-        }, 2000); // Delay sync by 2 seconds after app loads
+        }, 2000);
       }
     } catch (error) {
       console.error('App initialization error:', error);
       setIsLoading(false);
-    }
-  };
-
-  const checkOnboardingStatus = async () => {
-    try {
-      const settingsCollection = database.collections.get('settings');
-      const settings = await settingsCollection.query().fetch();
-      const onboardingSetting = settings.find(s => s.key === 'hasOnboarded');
-      setIsOnboarded(onboardingSetting?.value === 'true');
-    } catch (error) {
-      console.error('Error checking onboarding:', error);
     }
   };
 
@@ -144,19 +117,15 @@ function App() {
             <NavigationContainer>
           <Stack.Navigator screenOptions={{headerShown: false}}>
             {(() => {
-              console.log('🧭 Navigation state - isLoading:', isLoading, 'isOnboarded:', isOnboarded, 'hasUserProfile:', hasUserProfile);
+              console.log('🧭 Navigation state - isLoading:', isLoading, 'hasUserProfile:', hasUserProfile);
               return null;
             })()}
             {isLoading ? (
               <Stack.Screen name="Splash" component={SplashScreen} />
-            ) : !isOnboarded ? (
-              <Stack.Screen name="Onboarding">
-                {props => <OnboardingScreen {...props} onComplete={checkOnboardingStatus} />}
-              </Stack.Screen>
             ) : !hasUserProfile ? (
-              <Stack.Screen name="UserSetup">
-                {props => <UserSetupScreen {...props} onSetupComplete={() => {
-                  console.log('✅ Profile setup callback triggered');
+              <Stack.Screen name="Login">
+                {props => <SimpleLoginScreen {...props} onLoginComplete={() => {
+                  console.log('✅ Login complete');
                   setForceRefresh(prev => prev + 1);
                 }} />}
               </Stack.Screen>
