@@ -2,12 +2,12 @@
   "name": "guru-pos",
   "version": "1.0.0",
   "description": "G.U.R.U - Privacy-first POS & Billing app with offline-first WatermelonDB",
-  "main": "expo/AppEntry.js",
+  "main": "index.js",
   "scripts": {
     "start": "expo start",
     "android": "expo run:android",
     "build:apk": "eas build --platform android --profile production",
-    "clean": "rm -rf node_modules package-lock.json && npm install"
+    "clean": "rm -rf node_modules package-lock.json android ios .expo && npm install"
   },
   "dependencies": {
     "@expo/vector-icons": "^14.0.0",

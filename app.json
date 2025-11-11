@@ -7,17 +7,9 @@
     "userInterfaceStyle": "light",
     "icon": "./assets/icon.png",
     "splash": {
-      "image": "./assets/icon.png",
+      "image": "./assets/splash.png",
       "resizeMode": "contain",
       "backgroundColor": "#6B46C1"
-    },
-    "ios": {
-      "supportsTablet": true,
-      "bundleIdentifier": "com.guru.pos",
-      "infoPlist": {
-        "NSCameraUsageDescription": "This app uses the camera to scan barcodes for quick item entry.",
-        "NSPhotoLibraryUsageDescription": "This app needs access to save receipts to your photo library."
-      }
     },
     "android": {
       "package": "com.guru.pos",

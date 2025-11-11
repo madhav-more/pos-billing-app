@@ -6,27 +6,17 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
-      "android": {
-        "buildType": "apk"
-      }
+      "android": { "buildType": "apk" },
+      "env": { "NPM_CONFIG_LEGACY_PEER_DEPS": "true" }
     },
     "preview": {
       "distribution": "internal",
-      "android": {
-        "buildType": "apk"
-      },
-      "env": {
-        "NPM_CONFIG_LEGACY_PEER_DEPS": "true"
-      }
+      "android": { "buildType": "apk" },
+      "env": { "NPM_CONFIG_LEGACY_PEER_DEPS": "true" }
     },
     "production": {
-      "android": {
-        "buildType": "app-bundle"
-      },
-      "env": {
-        "EXPO_PUBLIC_API_URL": "https://your-api-url.com/api",
-        "NPM_CONFIG_LEGACY_PEER_DEPS": "true"
-      }
+      "android": { "buildType": "apk" },
+      "env": { "NPM_CONFIG_LEGACY_PEER_DEPS": "true" }
     }
   },
   "submit": {
