@@ -16,12 +16,19 @@ const userSchema = new mongoose.Schema({
     required: true
   },
   company: String,
-  location: String
+  location: String,
+  company_code: {
+    type: String,
+    required: true,
+    uppercase: true,
+    trim: true,
+  },
 }, {
   timestamps: true
 });
 
 // Index for faster queries
 userSchema.index({ email: 1 });
+userSchema.index({ company_code: 1 });
 
 export default mongoose.model('User', userSchema);

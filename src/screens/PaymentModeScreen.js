@@ -16,6 +16,7 @@ import {useCart} from '../context/CartContext';
 import {database} from '../db';
 import {Q} from '@nozbe/watermelondb';
 import customerService from '../services/customerService';
+import simpleAuthService from '../services/simpleAuthService';
 import {generateUUID} from '../utils/uuid';
 
 export default function PaymentModeScreen({route, navigation}) {
@@ -162,8 +163,20 @@ export default function PaymentModeScreen({route, navigation}) {
             const phoneMatch = customer.phone && customer.phone.includes(query);
             return nameMatch || phoneMatch;
           });
-          setCustomerSuggestions(filtered.slice(0, 5));
-          setShowSuggestions(filtered.length > 0);
+
+          const normalizedResults = filtered.slice(0, 5).map(item => ({
+            id: item.id,
+            localId: item.localId,
+            cloudId: item.cloudId,
+            name: item.name,
+            phone: item.phone,
+            email: item.email,
+            address: item.address,
+            source: 'local',
+          }));
+
+          setCustomerSuggestions(normalizedResults);
+          setShowSuggestions(normalizedResults.length > 0);
         }
       } catch (fallbackError) {
         console.error('Fallback customer search error:', fallbackError);
@@ -197,114 +210,165 @@ export default function PaymentModeScreen({route, navigation}) {
 
   // Select customer from suggestions with enhanced autofill
   const selectCustomer = async (customer) => {
+    let selected = {
+      localId: customer.localId || null,
+      cloudId: customer.cloudId || null,
+      name: customer.name || '',
+      phone: customer.phone || '',
+      email: customer.email || '',
+      address: customer.address || '',
+    };
+
     try {
-      // Use enhanced autofill to get complete customer data
       const autofillResult = await customerService.autoFillCustomer({
         phone: customer.phone,
         email: customer.email,
-        name: customer.name
+        name: customer.name,
       });
 
       if (autofillResult.found && autofillResult.customer) {
-        // Use the enhanced customer data
-        const enhancedCustomer = autofillResult.customer;
-        setCustomerMobile(enhancedCustomer.phone || '');
-        setCustomerName(enhancedCustomer.name || '');
-        setCustomerEmail(enhancedCustomer.email || '');
-        setCustomerAddress(enhancedCustomer.address || '');
-      } else {
-        // Fallback to basic customer data
-        setCustomerMobile(customer.phone || '');
-        setCustomerName(customer.name || '');
-        setCustomerEmail(customer.email || '');
-        setCustomerAddress(customer.address || '');
+        selected = {
+          localId: autofillResult.customer.localId ?? selected.localId,
+          cloudId: autofillResult.customer.cloudId ?? selected.cloudId,
+          name: autofillResult.customer.name ?? selected.name,
+          phone: autofillResult.customer.phone ?? selected.phone,
+          email: autofillResult.customer.email ?? selected.email,
+          address: autofillResult.customer.address ?? selected.address,
+        };
       }
     } catch (error) {
       console.error('Enhanced autofill error:', error);
-      // Fallback to basic customer data
-      setCustomerMobile(customer.phone || '');
-      setCustomerName(customer.name || '');
-      setCustomerEmail(customer.email || '');
-      setCustomerAddress(customer.address || '');
     }
-    
+
+    setCustomerMobile(selected.phone || '');
+    setCustomerName(selected.name || '');
+    setCustomerEmail(selected.email || '');
+    setCustomerAddress(selected.address || '');
+
+    try {
+      const persistPayload = {
+        name: selected.name || 'Customer',
+        phone: selected.phone,
+        email: selected.email,
+        address: selected.address,
+        userId: simpleAuthService.getUserId(),
+      };
+
+      if (selected.localId) {
+        persistPayload.localId = selected.localId;
+      }
+
+      if (selected.cloudId || customer.cloudId) {
+        persistPayload.cloudId = selected.cloudId || customer.cloudId;
+      }
+
+      if (customer.source !== 'cloud' && customer.id) {
+        persistPayload.id = customer.id;
+      }
+
+      await customerService.saveCustomer(persistPayload);
+    } catch (persistError) {
+      console.error('Persist selected customer error:', persistError);
+    }
+
     setShowSuggestions(false);
     setCustomerSuggestions([]);
   };
 
   // Save new customer to database using enhanced customer service
   const saveCustomer = async () => {
-    if (!customerMobile && !customerName) {
+    const normalize = value => {
+      const trimmed = (value ?? '').toString().trim();
+      return trimmed.length > 0 ? trimmed : null;
+    };
+
+    const normalizedPhone = normalize(customerMobile);
+    const normalizedName = normalize(customerName);
+    const normalizedEmail = normalize(customerEmail);
+    const normalizedAddress = normalize(customerAddress);
+
+    if (!normalizedPhone && !normalizedName) {
       return null;
     }
 
-    try {
-      let customer = null;
+    const activeUserId = simpleAuthService.getUserId();
 
-      // First try to find existing customer using enhanced service
-      const existingCustomer = await customerService.getCustomerByPhone(customerMobile);
-      
+    try {
+      const existingCustomer = normalizedPhone
+        ? await customerService.getCustomerByPhone(normalizedPhone)
+        : normalizedEmail
+        ? await customerService.getCustomerByEmail(normalizedEmail)
+        : null;
+
       if (existingCustomer) {
-        // Update existing customer using enhanced service
-        customer = await customerService.saveCustomer({
+        return await customerService.saveCustomer({
+          id: existingCustomer.id,
           localId: existingCustomer.localId,
-          name: customerName || existingCustomer.name,
-          phone: customerMobile || existingCustomer.phone,
-          email: customerEmail || existingCustomer.email,
-          address: customerAddress || existingCustomer.address,
-          userId: existingCustomer.userId
-        });
-      } else {
-        // Create new customer using enhanced service
-        customer = await customerService.saveCustomer({
-          name: customerName || 'Customer',
-          phone: customerMobile || '',
-          email: customerEmail || '',
-          address: customerAddress || '',
-          userId: 'current_user_id' // This should be set from auth context
+          name: normalizedName || existingCustomer.name,
+          phone: normalizedPhone || existingCustomer.phone,
+          email: normalizedEmail || existingCustomer.email,
+          address: normalizedAddress || existingCustomer.address,
+          userId: existingCustomer.userId || activeUserId,
         });
       }
 
-      return customer;
+      return await customerService.saveCustomer({
+        name: normalizedName || 'Customer',
+        phone: normalizedPhone,
+        email: normalizedEmail,
+        address: normalizedAddress,
+        userId: activeUserId,
+      });
     } catch (error) {
       console.error('Save customer error:', error);
-      // Fallback to direct database operations
+
       try {
-        let customer = null;
         const customersCollection = database.collections.get('customers');
+        let customer = null;
         let existing = [];
-        
-        if (customerMobile && customerMobile.trim()) {
+
+        if (normalizedPhone) {
           existing = await customersCollection
-            .query(Q.where('phone', customerMobile))
+            .query(Q.where('phone', normalizedPhone))
             .fetch();
         }
+
+        const fallbackTimestamp = Date.now();
 
         await database.write(async () => {
           if (existing.length > 0) {
             customer = existing[0];
             await customer.update(c => {
-              if (customerName) c.name = customerName;
-              if (customerEmail) c.email = customerEmail;
-              if (customerAddress) c.address = customerAddress;
+              c.name = normalizedName || c.name || 'Customer';
+              c.phone = normalizedPhone;
+              c.email = normalizedEmail;
+              c.address = normalizedAddress;
               c.isSynced = false;
               c.syncStatus = 'pending';
+              c.syncedAt = null;
+              c.lastSyncAttempt = null;
+              c.userId = activeUserId;
+              c._raw.updated_at = fallbackTimestamp;
             });
           } else {
             const localId = generateUUID();
             const idempotencyKey = generateUUID();
-            
+
             customer = await customersCollection.create(c => {
               c.localId = localId;
               c.idempotencyKey = idempotencyKey;
-              c.phone = customerMobile || '';
-              c.name = customerName || 'Customer';
-              c.email = customerEmail || '';
-              c.address = customerAddress || '';
+              c.phone = normalizedPhone;
+              c.name = normalizedName || 'Customer';
+              c.email = normalizedEmail;
+              c.address = normalizedAddress;
               c.isSynced = false;
               c.syncStatus = 'pending';
+              c.syncedAt = null;
+              c.lastSyncAttempt = null;
               c.cloudId = null;
-              c.userId = null;
+              c.userId = activeUserId;
+              c._raw.created_at = fallbackTimestamp;
+              c._raw.updated_at = fallbackTimestamp;
             });
           }
         });

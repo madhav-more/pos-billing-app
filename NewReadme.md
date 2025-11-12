@@ -3,7 +3,7 @@
 zip file 
 npm install --legacy-peer-deps
 ```
-
+hiii
 ### 2. Run the app in development mode
 ```bash
 npx expo start

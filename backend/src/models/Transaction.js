@@ -34,6 +34,12 @@ const transactionSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  company_code: {
+    type: String,
+    required: true,
+    uppercase: true,
+    trim: true,
+  },
   customer_id: {
     type: String,
     ref: 'Customer'
@@ -88,6 +94,7 @@ const transactionSchema = new mongoose.Schema({
 });
 
 transactionSchema.index({ user_id: 1 });
+transactionSchema.index({ company_code: 1 });
 transactionSchema.index({ customer_id: 1 });
 transactionSchema.index({ date: 1 });
 transactionSchema.index({ status: 1 });

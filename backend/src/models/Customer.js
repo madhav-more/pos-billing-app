@@ -15,7 +15,13 @@ const customerSchema = new mongoose.Schema({
   },
   phone: String,
   email: String,
-  address: String
+  address: String,
+  company_code: {
+    type: String,
+    required: true,
+    uppercase: true,
+    trim: true,
+  }
 }, {
   timestamps: true,
   _id: false // We're using custom _id
@@ -23,6 +29,7 @@ const customerSchema = new mongoose.Schema({
 
 customerSchema.index({ user_id: 1 });
 customerSchema.index({ phone: 1 });
+customerSchema.index({ company_code: 1 });
 customerSchema.index({ updatedAt: 1 });
 
 export default mongoose.model('Customer', customerSchema);

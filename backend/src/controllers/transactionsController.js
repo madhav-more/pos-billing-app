@@ -1,6 +1,7 @@
 import Transaction from '../models/Transaction.js';
 import Item from '../models/Item.js';
 import mongoose from 'mongoose';
+import { resolveCompanyCode } from '../utils/companyScope.js';
 
 export const createTransactionsBatch = async (req, res) => {
   const { transactions } = req.body;
@@ -14,6 +15,12 @@ export const createTransactionsBatch = async (req, res) => {
   session.startTransaction();
 
   try {
+    const companyCode = await resolveCompanyCode(req);
+    if (!companyCode) {
+      await session.abortTransaction();
+      return res.status(403).json({ error: 'Company scope required' });
+    }
+
     const createdTransactions = [];
     const warnings = [];
 
@@ -27,7 +34,7 @@ export const createTransactionsBatch = async (req, res) => {
       }
 
       // Check if transaction already exists (idempotency)
-      const existingTx = await Transaction.findById(id).session(session);
+      const existingTx = await Transaction.findOne({ _id: id, company_code: companyCode }).session(session);
       if (existingTx) {
         warnings.push({ transaction: id, error: 'Transaction already exists (skipped)' });
         continue;
@@ -38,7 +45,7 @@ export const createTransactionsBatch = async (req, res) => {
       // Update inventory for each line
       for (const line of lines) {
         if (line.item_id) {
-          const item = await Item.findById(line.item_id).session(session);
+          const item = await Item.findOne({ _id: line.item_id, company_code: companyCode }).session(session);
           if (item) {
             const newQty = item.inventory_qty - line.quantity;
             item.inventory_qty = newQty;
@@ -60,6 +67,7 @@ export const createTransactionsBatch = async (req, res) => {
       const newTransaction = await Transaction.create([{
         _id: id,
         user_id: userId,
+        company_code: companyCode,
         customer_id,
         date: date || new Date(),
         subtotal: subtotal || 0,
@@ -94,13 +102,26 @@ export const createTransactionsBatch = async (req, res) => {
 
 export const getTransactions = async (req, res) => {
   const { from, to, customer_id, payment_type, status, since } = req.query;
-  const userId = req.user.userId;
 
   try {
-    const query = { user_id: userId };
+    const companyCode = await resolveCompanyCode(req);
+    if (!companyCode) {
+      return res.status(403).json({ error: 'Company scope required' });
+    }
 
-    if (from) query.date = { $gte: new Date(from) };
-    if (to) query.date = { ...query.date, $lte: new Date(to) };
+    const query = { company_code: companyCode };
+
+    const dateFilter = {};
+    if (from) {
+      dateFilter.$gte = new Date(from);
+    }
+    if (to) {
+      dateFilter.$lte = new Date(to);
+    }
+    if (Object.keys(dateFilter).length > 0) {
+      query.date = dateFilter;
+    }
+
     if (customer_id) query.customer_id = customer_id;
     if (payment_type) query.payment_type = payment_type;
     if (status) query.status = status;

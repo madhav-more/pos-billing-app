@@ -176,19 +176,26 @@ class ComprehensiveSyncService {
         const itemsCollection = database.collections.get('items');
         const customersCollection = database.collections.get('customers');
         const transactionsCollection = database.collections.get('transactions');
+        const nowIso = new Date().toISOString();
+        const nowTs = Date.now();
 
         if (result.items?.synced) {
           for (const syncedItem of result.items.synced) {
+            const localId = syncedItem.local_id || syncedItem.id;
+            if (!localId) continue;
+
             const items = await itemsCollection.query(
-              Q.where('local_id', syncedItem.id)
+              Q.where('local_id', localId)
             ).fetch();
-            
+
             if (items.length > 0) {
               await items[0].update(item => {
-                item.is_synced = true;
-                item.cloud_id = syncedItem.cloud_id || syncedItem.id;
-                item.synced_at = new Date().toISOString();
-                item.sync_status = 'synced';
+                item.isSynced = true;
+                item.cloudId = syncedItem.cloud_id || syncedItem.cloudId || item.cloudId || null;
+                item.syncedAt = nowIso;
+                item.syncStatus = 'synced';
+                item.lastSyncAttempt = nowIso;
+                item._raw.updated_at = nowTs;
               });
             }
           }
@@ -196,16 +203,21 @@ class ComprehensiveSyncService {
 
         if (result.customers?.synced) {
           for (const syncedCustomer of result.customers.synced) {
+            const localId = syncedCustomer.local_id || syncedCustomer.id;
+            if (!localId) continue;
+
             const customers = await customersCollection.query(
-              Q.where('local_id', syncedCustomer.id)
+              Q.where('local_id', localId)
             ).fetch();
-            
+
             if (customers.length > 0) {
               await customers[0].update(customer => {
-                customer.is_synced = true;
-                customer.cloud_id = syncedCustomer.cloud_id || syncedCustomer.id;
-                customer.synced_at = new Date().toISOString();
-                customer.sync_status = 'synced';
+                customer.isSynced = true;
+                customer.cloudId = syncedCustomer.cloud_id || syncedCustomer.cloudId || customer.cloudId || null;
+                customer.syncedAt = nowIso;
+                customer.syncStatus = 'synced';
+                customer.lastSyncAttempt = nowIso;
+                customer._raw.updated_at = nowTs;
               });
             }
           }
@@ -213,20 +225,25 @@ class ComprehensiveSyncService {
 
         if (result.transactions?.synced) {
           for (const syncedTx of result.transactions.synced) {
+            const localId = syncedTx.local_id || syncedTx.id;
+            if (!localId) continue;
+
             const transactions = await transactionsCollection.query(
-              Q.where('local_id', syncedTx.id)
+              Q.where('local_id', localId)
             ).fetch();
-            
+
             if (transactions.length > 0) {
               await transactions[0].update(tx => {
-                tx.is_synced = true;
-                tx.cloud_id = syncedTx.cloud_id || syncedTx.id;
-                tx.synced_at = new Date().toISOString();
-                tx.sync_status = 'synced';
+                tx.isSynced = true;
+                tx.cloudId = syncedTx.cloud_id || syncedTx.cloudId || tx.cloudId || null;
+                tx.syncedAt = nowIso;
+                tx.syncStatus = 'synced';
+                tx.lastSyncAttempt = nowIso;
                 if (syncedTx.voucher_number) {
-                  tx.voucher_number = syncedTx.voucher_number;
-                  tx.provisional_voucher = null;
+                  tx.voucherNumber = syncedTx.voucher_number;
+                  tx.provisionalVoucher = null;
                 }
+                tx._raw.updated_at = nowTs;
               });
             }
           }
@@ -285,28 +302,82 @@ class ComprehensiveSyncService {
         const customersCollection = database.collections.get('customers');
         const transactionsCollection = database.collections.get('transactions');
 
+        const normalizeTimestamp = (value) => {
+          if (!value) {
+            return Date.now();
+          }
+          const parsed = new Date(value);
+          return Number.isNaN(parsed.getTime()) ? Date.now() : parsed.getTime();
+        };
+
+        const normalizeIso = (value) => {
+          if (!value) {
+            return new Date().toISOString();
+          }
+          const parsed = new Date(value);
+          return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
+        };
+
         if (serverData.items && serverData.items.length > 0) {
           for (const serverItem of serverData.items) {
+            const cloudId =
+              (serverItem._id && serverItem._id.toString ? serverItem._id.toString() : serverItem._id) ||
+              serverItem.cloud_id ||
+              serverItem.id;
+            if (!cloudId) {
+              continue;
+            }
+
+            const createdTs = normalizeTimestamp(serverItem.createdAt || serverItem.created_at);
+            const updatedTs = normalizeTimestamp(serverItem.updatedAt || serverItem.updated_at);
+            const syncedIso = normalizeIso(serverItem.syncedAt || serverItem.synced_at || serverItem.updatedAt || serverItem.updated_at);
+
             const existing = await itemsCollection.query(
-              Q.where('cloud_id', serverItem._id.toString())
+              Q.where('cloud_id', cloudId)
             ).fetch();
 
-            if (existing.length === 0) {
+            if (existing.length > 0) {
+              const record = existing[0];
+              const localUpdated = record._raw?.updated_at ?? 0;
+
+              if (updatedTs >= localUpdated) {
+                await record.update(item => {
+                  item.name = serverItem.name ?? item.name;
+                  item.barcode = serverItem.barcode ?? item.barcode;
+                  item.sku = serverItem.sku ?? item.sku;
+                  item.price = serverItem.price ?? item.price;
+                  item.unit = serverItem.unit ?? item.unit;
+                  item.category = serverItem.category ?? item.category;
+                  item.inventoryQty = serverItem.inventory_qty ?? item.inventoryQty;
+                  item.recommended =
+                    typeof serverItem.recommended === 'boolean' ? serverItem.recommended : item.recommended;
+                  item.userId = serverItem.user_id || item.userId || null;
+                  item.isSynced = true;
+                  item.syncStatus = 'synced';
+                  item.syncedAt = syncedIso;
+                  item.lastSyncAttempt = syncedIso;
+                  item._raw.updated_at = updatedTs;
+                });
+              }
+            } else {
               await itemsCollection.create(item => {
-                item.id = generateUUID();
-                item.cloud_id = serverItem._id.toString();
-                item.name = serverItem.name;
-                item.barcode = serverItem.barcode;
-                item.sku = serverItem.sku;
-                item.price = serverItem.price;
-                item.unit = serverItem.unit;
-                item.category = serverItem.category;
-                item.inventory_qty = serverItem.inventory_qty;
-                item.is_synced = true;
-                item.sync_status = 'synced';
-                item.synced_at = new Date().toISOString();
-                item.created_at = Date.now();
-                item.updated_at = Date.now();
+                item.localId = serverItem.local_id || generateUUID();
+                item.cloudId = cloudId;
+                item.userId = serverItem.user_id || null;
+                item.name = serverItem.name || '';
+                item.barcode = serverItem.barcode || null;
+                item.sku = serverItem.sku || null;
+                item.price = serverItem.price ?? 0;
+                item.unit = serverItem.unit || 'pc';
+                item.category = serverItem.category || null;
+                item.inventoryQty = serverItem.inventory_qty ?? 0;
+                item.recommended = !!serverItem.recommended;
+                item.isSynced = true;
+                item.syncStatus = 'synced';
+                item.syncedAt = syncedIso;
+                item.lastSyncAttempt = syncedIso;
+                item._raw.created_at = createdTs;
+                item._raw.updated_at = updatedTs;
               });
               appliedCount++;
             }
@@ -315,23 +386,55 @@ class ComprehensiveSyncService {
 
         if (serverData.customers && serverData.customers.length > 0) {
           for (const serverCustomer of serverData.customers) {
+            const cloudId =
+              (serverCustomer._id && serverCustomer._id.toString ? serverCustomer._id.toString() : serverCustomer._id) ||
+              serverCustomer.cloud_id ||
+              serverCustomer.id;
+            if (!cloudId) {
+              continue;
+            }
+
+            const createdTs = normalizeTimestamp(serverCustomer.createdAt || serverCustomer.created_at);
+            const updatedTs = normalizeTimestamp(serverCustomer.updatedAt || serverCustomer.updated_at);
+            const syncedIso = normalizeIso(serverCustomer.syncedAt || serverCustomer.synced_at || serverCustomer.updatedAt || serverCustomer.updated_at);
+
             const existing = await customersCollection.query(
-              Q.where('cloud_id', serverCustomer._id.toString())
+              Q.where('cloud_id', cloudId)
             ).fetch();
 
-            if (existing.length === 0) {
+            if (existing.length > 0) {
+              const record = existing[0];
+              const localUpdated = record._raw?.updated_at ?? 0;
+
+              if (updatedTs >= localUpdated) {
+                await record.update(customer => {
+                  customer.name = serverCustomer.name ?? customer.name;
+                  customer.phone = serverCustomer.phone ?? customer.phone;
+                  customer.email = serverCustomer.email ?? customer.email;
+                  customer.address = serverCustomer.address ?? customer.address;
+                  customer.userId = serverCustomer.user_id || customer.userId || null;
+                  customer.isSynced = true;
+                  customer.syncStatus = 'synced';
+                  customer.syncedAt = syncedIso;
+                  customer.lastSyncAttempt = syncedIso;
+                  customer._raw.updated_at = updatedTs;
+                });
+              }
+            } else {
               await customersCollection.create(customer => {
-                customer.id = generateUUID();
-                customer.cloud_id = serverCustomer._id.toString();
-                customer.name = serverCustomer.name;
-                customer.phone = serverCustomer.phone;
-                customer.email = serverCustomer.email;
-                customer.address = serverCustomer.address;
-                customer.is_synced = true;
-                customer.sync_status = 'synced';
-                customer.synced_at = new Date().toISOString();
-                customer.created_at = Date.now();
-                customer.updated_at = Date.now();
+                customer.localId = serverCustomer.local_id || generateUUID();
+                customer.cloudId = cloudId;
+                customer.userId = serverCustomer.user_id || null;
+                customer.name = serverCustomer.name || 'Customer';
+                customer.phone = serverCustomer.phone || null;
+                customer.email = serverCustomer.email || null;
+                customer.address = serverCustomer.address || null;
+                customer.isSynced = true;
+                customer.syncStatus = 'synced';
+                customer.syncedAt = syncedIso;
+                customer.lastSyncAttempt = syncedIso;
+                customer._raw.created_at = createdTs;
+                customer._raw.updated_at = updatedTs;
               });
               appliedCount++;
             }
@@ -340,27 +443,77 @@ class ComprehensiveSyncService {
 
         if (serverData.transactions && serverData.transactions.length > 0) {
           for (const serverTx of serverData.transactions) {
+            const cloudId =
+              (serverTx._id && serverTx._id.toString ? serverTx._id.toString() : serverTx._id) ||
+              serverTx.cloud_id ||
+              serverTx.id;
+            if (!cloudId) {
+              continue;
+            }
+
+            const createdTs = normalizeTimestamp(serverTx.createdAt || serverTx.created_at);
+            const updatedTs = normalizeTimestamp(serverTx.updatedAt || serverTx.updated_at);
+            const syncedIso = normalizeIso(serverTx.syncedAt || serverTx.synced_at || serverTx.updatedAt || serverTx.updated_at);
+
             const existing = await transactionsCollection.query(
-              Q.where('cloud_id', serverTx._id.toString())
+              Q.where('cloud_id', cloudId)
             ).fetch();
 
-            if (existing.length === 0) {
+            if (existing.length > 0) {
+              const record = existing[0];
+              const localUpdated = record._raw?.updated_at ?? 0;
+
+              if (updatedTs >= localUpdated) {
+                await record.update(tx => {
+                  tx.voucherNumber = serverTx.voucher_number ?? tx.voucherNumber;
+                  tx.provisionalVoucher = serverTx.provisional_voucher ?? tx.provisionalVoucher;
+                  tx.customerId = serverTx.customer_id ?? tx.customerId;
+                  tx.customerName = serverTx.customer_name ?? tx.customerName;
+                  tx.customerMobile = serverTx.customer_mobile ?? tx.customerMobile;
+                  tx.date = serverTx.date ?? tx.date;
+                  tx.subtotal = serverTx.subtotal ?? tx.subtotal;
+                  tx.tax = serverTx.tax ?? tx.tax;
+                  tx.discount = serverTx.discount ?? tx.discount;
+                  tx.otherCharges = serverTx.other_charges ?? tx.otherCharges;
+                  tx.grandTotal = serverTx.grand_total ?? tx.grandTotal;
+                  tx.itemCount = serverTx.item_count ?? tx.itemCount;
+                  tx.unitCount = serverTx.unit_count ?? tx.unitCount;
+                  tx.paymentType = serverTx.payment_type ?? tx.paymentType;
+                  tx.status = serverTx.status ?? tx.status;
+                  tx.userId = serverTx.user_id || tx.userId || null;
+                  tx.isSynced = true;
+                  tx.syncStatus = 'synced';
+                  tx.syncedAt = syncedIso;
+                  tx.lastSyncAttempt = syncedIso;
+                  tx._raw.updated_at = updatedTs;
+                });
+              }
+            } else {
               await transactionsCollection.create(tx => {
-                tx.id = generateUUID();
-                tx.cloud_id = serverTx._id.toString();
-                tx.voucher_number = serverTx.voucher_number;
-                tx.customer_name = serverTx.customer_name;
-                tx.date = serverTx.date;
-                tx.subtotal = serverTx.subtotal;
-                tx.tax = serverTx.tax;
-                tx.discount = serverTx.discount;
-                tx.grand_total = serverTx.grand_total;
-                tx.payment_type = serverTx.payment_type;
-                tx.is_synced = true;
-                tx.sync_status = 'synced';
-                tx.synced_at = new Date().toISOString();
-                tx.created_at = Date.now();
-                tx.updated_at = Date.now();
+                tx.localId = serverTx.local_id || generateUUID();
+                tx.cloudId = cloudId;
+                tx.userId = serverTx.user_id || null;
+                tx.voucherNumber = serverTx.voucher_number || null;
+                tx.provisionalVoucher = serverTx.provisional_voucher || null;
+                tx.customerId = serverTx.customer_id || null;
+                tx.customerName = serverTx.customer_name || null;
+                tx.customerMobile = serverTx.customer_mobile || null;
+                tx.date = serverTx.date || new Date().toISOString();
+                tx.subtotal = serverTx.subtotal ?? 0;
+                tx.tax = serverTx.tax ?? 0;
+                tx.discount = serverTx.discount ?? 0;
+                tx.otherCharges = serverTx.other_charges ?? 0;
+                tx.grandTotal = serverTx.grand_total ?? 0;
+                tx.itemCount = serverTx.item_count ?? 0;
+                tx.unitCount = serverTx.unit_count ?? 0;
+                tx.paymentType = serverTx.payment_type || null;
+                tx.status = serverTx.status || 'completed';
+                tx.isSynced = true;
+                tx.syncStatus = 'synced';
+                tx.syncedAt = syncedIso;
+                tx.lastSyncAttempt = syncedIso;
+                tx._raw.created_at = createdTs;
+                tx._raw.updated_at = updatedTs;
               });
               appliedCount++;
             }

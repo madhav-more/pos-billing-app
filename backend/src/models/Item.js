@@ -32,6 +32,12 @@ const itemSchema = new mongoose.Schema({
   recommended: {
     type: Boolean,
     default: false
+  },
+  company_code: {
+    type: String,
+    required: true,
+    uppercase: true,
+    trim: true,
   }
 }, {
   timestamps: true,
@@ -42,6 +48,7 @@ itemSchema.index({ user_id: 1 });
 itemSchema.index({ barcode: 1 });
 itemSchema.index({ sku: 1 });
 itemSchema.index({ category: 1 });
+itemSchema.index({ company_code: 1 });
 itemSchema.index({ updatedAt: 1 });
 
 export default mongoose.model('Item', itemSchema);

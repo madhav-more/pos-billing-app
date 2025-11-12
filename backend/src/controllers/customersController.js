@@ -1,30 +1,32 @@
 import Customer from '../models/Customer.js';
+import { resolveCompanyCode } from '../utils/companyScope.js';
 
 /**
  * Search customers with autosuggest functionality
  */
 export const searchCustomers = async (req, res) => {
   const { query, limit = 10, searchFields = ['name', 'phone', 'email'] } = req.body;
-  const userId = req.user.userId;
 
   if (!query || typeof query !== 'string') {
     return res.status(400).json({ error: 'Query parameter is required' });
   }
 
   try {
-    // Build search conditions
+    const companyCode = await resolveCompanyCode(req);
+    if (!companyCode) {
+      return res.status(403).json({ error: 'Company scope required' });
+    }
+
     const searchTerms = query.toLowerCase().split(' ').filter(term => term.length > 0);
     
     if (searchTerms.length === 0) {
       return res.json({ customers: [] });
     }
 
-    // Create regex patterns for each search term
     const regexPatterns = searchTerms.map(term => new RegExp(term, 'i'));
 
-    // Build MongoDB query
     const conditions = {
-      user_id: userId,
+      company_code: companyCode,
       $or: searchFields.map(field => ({
         [field]: { $in: regexPatterns }
       }))
@@ -89,10 +91,14 @@ const calculateRelevanceScore = (customer, query, searchFields) => {
 
 export const getCustomers = async (req, res) => {
   const { since } = req.query;
-  const userId = req.user.userId;
 
   try {
-    const query = { user_id: userId };
+    const companyCode = await resolveCompanyCode(req);
+    if (!companyCode) {
+      return res.status(403).json({ error: 'Company scope required' });
+    }
+
+    const query = { company_code: companyCode };
     if (since) {
       query.updatedAt = { $gt: new Date(since) };
     }
@@ -114,6 +120,11 @@ export const createCustomersBatch = async (req, res) => {
   }
 
   try {
+    const companyCode = await resolveCompanyCode(req);
+    if (!companyCode) {
+      return res.status(403).json({ error: 'Company scope required' });
+    }
+
     const createdCustomers = [];
     const warnings = [];
 
@@ -125,7 +136,7 @@ export const createCustomersBatch = async (req, res) => {
         continue;
       }
 
-      const existingCustomer = await Customer.findById(id);
+      const existingCustomer = await Customer.findOne({ _id: id, company_code: companyCode });
       const customerUpdatedAt = updated_at ? new Date(updated_at) : new Date();
 
       if (existingCustomer && existingCustomer.updatedAt > customerUpdatedAt) {
@@ -133,11 +144,12 @@ export const createCustomersBatch = async (req, res) => {
         continue;
       }
 
-      const upsertedCustomer = await Customer.findByIdAndUpdate(
-        id,
+      const upsertedCustomer = await Customer.findOneAndUpdate(
+        { _id: id, company_code: companyCode },
         {
           _id: id,
           user_id: userId,
+          company_code: companyCode,
           name,
           phone,
           email,
@@ -163,9 +175,19 @@ export const updateCustomer = async (req, res) => {
   const updates = req.body;
 
   try {
+    const companyCode = await resolveCompanyCode(req);
+    if (!companyCode) {
+      return res.status(403).json({ error: 'Company scope required' });
+    }
+
+    const safeUpdates = { ...updates, company_code: companyCode };
+    if (userId) {
+      safeUpdates.user_id = userId;
+    }
+
     const customer = await Customer.findOneAndUpdate(
-      { _id: id, user_id: userId },
-      { $set: updates },
+      { _id: id, company_code: companyCode },
+      { $set: safeUpdates },
       { new: true }
     );
 

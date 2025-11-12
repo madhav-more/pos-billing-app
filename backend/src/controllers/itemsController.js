@@ -1,11 +1,16 @@
 import Item from '../models/Item.js';
+import { resolveCompanyCode } from '../utils/companyScope.js';
 
 export const getItems = async (req, res) => {
   const { since } = req.query;
-  const userId = req.user.userId;
 
   try {
-    const query = { user_id: userId };
+    const companyCode = await resolveCompanyCode(req);
+    if (!companyCode) {
+      return res.status(403).json({ error: 'Company scope required' });
+    }
+
+    const query = { company_code: companyCode };
     if (since) {
       query.updatedAt = { $gt: new Date(since) };
     }
@@ -27,6 +32,11 @@ export const createItemsBatch = async (req, res) => {
   }
 
   try {
+    const companyCode = await resolveCompanyCode(req);
+    if (!companyCode) {
+      return res.status(403).json({ error: 'Company scope required' });
+    }
+
     const createdItems = [];
     const warnings = [];
 
@@ -39,7 +49,7 @@ export const createItemsBatch = async (req, res) => {
       }
 
       // Upsert with conflict resolution based on updatedAt
-      const existingItem = await Item.findById(id);
+      const existingItem = await Item.findOne({ _id: id, company_code: companyCode });
       const itemUpdatedAt = updated_at ? new Date(updated_at) : new Date();
 
       if (existingItem && existingItem.updatedAt > itemUpdatedAt) {
@@ -47,11 +57,12 @@ export const createItemsBatch = async (req, res) => {
         continue;
       }
 
-      const upsertedItem = await Item.findByIdAndUpdate(
-        id,
+      const upsertedItem = await Item.findOneAndUpdate(
+        { _id: id, company_code: companyCode },
         {
           _id: id,
           user_id: userId,
+          company_code: companyCode,
           name,
           barcode,
           sku,
@@ -82,9 +93,19 @@ export const updateItem = async (req, res) => {
   const updates = req.body;
 
   try {
+    const companyCode = await resolveCompanyCode(req);
+    if (!companyCode) {
+      return res.status(403).json({ error: 'Company scope required' });
+    }
+
+    const safeUpdates = { ...updates, company_code: companyCode };
+    if (userId) {
+      safeUpdates.user_id = userId;
+    }
+
     const item = await Item.findOneAndUpdate(
-      { _id: id, user_id: userId },
-      { $set: updates },
+      { _id: id, company_code: companyCode },
+      { $set: safeUpdates },
       { new: true }
     );
 
@@ -101,10 +122,14 @@ export const updateItem = async (req, res) => {
 
 export const deleteItem = async (req, res) => {
   const { id } = req.params;
-  const userId = req.user.userId;
 
   try {
-    const item = await Item.findOneAndDelete({ _id: id, user_id: userId });
+    const companyCode = await resolveCompanyCode(req);
+    if (!companyCode) {
+      return res.status(403).json({ error: 'Company scope required' });
+    }
+
+    const item = await Item.findOneAndDelete({ _id: id, company_code: companyCode });
 
     if (!item) {
       return res.status(404).json({ error: 'Item not found' });

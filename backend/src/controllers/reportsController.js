@@ -1,15 +1,30 @@
 import Transaction from '../models/Transaction.js';
 import User from '../models/User.js';
+import { resolveCompanyCode } from '../utils/companyScope.js';
 
 export const getSalesReport = async (req, res) => {
   const { from, to, customer_id, payment_type } = req.query;
   const userId = req.user.userId;
 
   try {
-    const query = { user_id: userId, status: 'completed' };
+    const companyCode = await resolveCompanyCode(req);
+    if (!companyCode) {
+      return res.status(403).json({ error: 'Company scope required' });
+    }
 
-    if (from) query.date = { $gte: new Date(from) };
-    if (to) query.date = { ...query.date, $lte: new Date(to) };
+    const query = { company_code: companyCode, status: 'completed' };
+
+    const dateFilter = {};
+    if (from) {
+      dateFilter.$gte = new Date(from);
+    }
+    if (to) {
+      dateFilter.$lte = new Date(to);
+    }
+    if (Object.keys(dateFilter).length > 0) {
+      query.date = dateFilter;
+    }
+
     if (customer_id) query.customer_id = customer_id;
     if (payment_type) query.payment_type = payment_type;
 

@@ -1,5 +1,8 @@
 import { database } from '../db';
+import { Q } from '@nozbe/watermelondb';
 import enhancedSyncService from './enhancedSyncService';
+import simpleAuthService from './simpleAuthService';
+import { generateUUID } from '../utils/uuid';
 
 /**
  * Customer Service for autosuggest, search, and management
@@ -22,7 +25,7 @@ class CustomerService {
 
     try {
       // Check cache first
-      const cacheKey = `${query}-${limit}-${searchFields.join(',')}`;
+      const cacheKey = `${query}-${limit}-${searchFields.join(',')}-${includeCloud ? 'cloud' : 'local'}`;
       const cached = this.searchCache.get(cacheKey);
       if (cached && Date.now() - cached.timestamp < this.cacheTimeout) {
         return cached.results;
@@ -36,14 +39,18 @@ class CustomerService {
       
       if (searchTerms.length > 0) {
         const allCustomers = await customersCollection.query().fetch();
-        
-        localResults = allCustomers.filter(customer => {
-          const searchableText = searchFields.map(field => 
-            customer[field] ? customer[field].toString().toLowerCase() : ''
-          ).join(' ');
-          
+
+        const filteredCustomers = allCustomers.filter(customer => {
+          const searchableText = searchFields
+            .map(field => (customer[field] ? customer[field].toString().toLowerCase() : ''))
+            .join(' ');
+
           return searchTerms.every(term => searchableText.includes(term));
-        }).slice(0, limit);
+        });
+
+        localResults = filteredCustomers
+          .map(customer => this.formatCustomerRecord(customer, 'local'))
+          .filter(Boolean);
       }
 
       // Sort by relevance (exact matches first, then partial)
@@ -52,6 +59,9 @@ class CustomerService {
         const bScore = this.calculateRelevanceScore(b, query, searchFields);
         return bScore - aScore;
       });
+
+      // Limit local results to prioritize best matches while allowing room for cloud suggestions
+      localResults = localResults.slice(0, limit * 2);
 
       // If online and includeCloud, also search cloud database
       let cloudResults = [];
@@ -114,24 +124,39 @@ class CustomerService {
    * Search cloud customers (when online)
    */
   async searchCloudCustomers(query, options = {}) {
-    const { limit = 10 } = options;
+    const {
+      limit = 10,
+      searchFields = ['name', 'phone', 'email'],
+    } = options;
     
     try {
+      const headers = {
+        'Content-Type': 'application/json',
+      };
+
       const token = await this.getAuthToken();
-      if (!token) return [];
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      } else {
+        const simpleUserId = simpleAuthService.getUserId();
+        if (!simpleUserId) {
+          return [];
+        }
+        headers['X-User-ID'] = simpleUserId;
+      }
 
       const response = await fetch(`${process.env.EXPO_PUBLIC_API_URL}/api/customers/search`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify({ query, limit }),
+        headers,
+        body: JSON.stringify({ query, limit, searchFields }),
       });
 
       if (response.ok) {
         const data = await response.json();
-        return data.customers || [];
+        const customers = data.customers || [];
+        return customers
+          .map(customer => this.formatCustomerRecord(customer, 'cloud'))
+          .filter(Boolean);
       }
       
       return [];
@@ -189,34 +214,24 @@ class CustomerService {
     }
   }
 
+  async getCustomerByLocalId(localId) {
+    return await this.findCustomerByColumn('local_id', localId);
+  }
+
   /**
    * Get customer by phone number
    */
   async getCustomerByPhone(phone) {
-    try {
-      const customersCollection = database.collections.get('customers');
-      const customers = await customersCollection.query().fetch();
-      const customer = customers.find(c => c.phone === phone);
-      return customer || null;
-    } catch (error) {
-      console.error('Get customer by phone error:', error);
-      return null;
-    }
+    const normalizedPhone = this.normalizeCustomerFields({ phone }).phone;
+    return await this.findCustomerByColumn('phone', normalizedPhone);
   }
 
   /**
    * Get customer by email
    */
   async getCustomerByEmail(email) {
-    try {
-      const customersCollection = database.collections.get('customers');
-      const customers = await customersCollection.query().fetch();
-      const customer = customers.find(c => c.email === email);
-      return customer || null;
-    } catch (error) {
-      console.error('Get customer by email error:', error);
-      return null;
-    }
+    const normalizedEmail = this.normalizeCustomerFields({ email }).email;
+    return await this.findCustomerByColumn('email', normalizedEmail);
   }
 
   /**
@@ -224,67 +239,234 @@ class CustomerService {
    */
   async saveCustomer(customerData) {
     try {
-      const { localId, name, phone, email, address } = customerData;
       const customersCollection = database.collections.get('customers');
+      const normalized = this.normalizeCustomerFields(customerData);
+      const userId = customerData?.userId || simpleAuthService.getUserId() || null;
 
-      let customer;
-      
-      await database.write(async () => {
-        if (localId) {
-          // Update existing customer - check if it exists first
-          try {
-            customer = await customersCollection.find(localId);
-            await customer.update(record => {
-              record.name = name;
-              record.phone = phone;
-              record.email = email;
-              record.address = address;
-              record.isSynced = false;
-              // updatedAt is readonly and auto-managed by WatermelonDB
-            });
-          } catch (findError) {
-            // Customer not found, create new one
-            const { generateUUID } = require('../utils/uuid');
-            customer = await customersCollection.create(record => {
-              record.localId = generateUUID();
-              record.cloudId = null;
-              record.userId = customerData.userId;
-              record.name = name;
-              record.phone = phone;
-              record.email = email;
-              record.address = address;
-              record.isSynced = false;
-              record.syncedAt = null;
-              // updatedAt and createdAt are readonly and auto-managed by WatermelonDB
-              record.idempotencyKey = `customer-${record.localId}-${Date.now()}`;
-            });
-          }
-        } else {
-          // Create new customer
-          const { generateUUID } = require('../utils/uuid');
-          customer = await customersCollection.create(record => {
-            record.localId = generateUUID();
-            record.cloudId = null;
-            record.userId = customerData.userId;
-            record.name = name;
-            record.phone = phone;
-            record.email = email;
-            record.address = address;
+      let existingCustomer = null;
+
+      if (customerData?.id) {
+        try {
+          existingCustomer = await customersCollection.find(customerData.id);
+        } catch (findError) {
+          existingCustomer = null;
+        }
+      }
+
+      if (!existingCustomer && customerData?.localId) {
+        existingCustomer = await this.findCustomerByColumn('local_id', customerData.localId);
+      }
+
+      if (!existingCustomer && customerData?.cloudId) {
+        existingCustomer = await this.findCustomerByColumn('cloud_id', customerData.cloudId);
+      }
+
+      if (!existingCustomer && normalized.phone) {
+        existingCustomer = await this.findCustomerByColumn('phone', normalized.phone);
+      }
+
+      if (!existingCustomer && normalized.email) {
+        existingCustomer = await this.findCustomerByColumn('email', normalized.email);
+      }
+
+      const timestamp = Date.now();
+      const baseQueuePayload = {
+        name: normalized.name,
+        phone: normalized.phone,
+        email: normalized.email,
+        address: normalized.address,
+        user_id: userId,
+        updated_at: timestamp,
+      };
+
+      const upsertedCustomer = await database.write(async () => {
+        if (existingCustomer) {
+          await existingCustomer.update(record => {
+            record.name = normalized.name;
+            record.phone = normalized.phone;
+            record.email = normalized.email;
+            record.address = normalized.address;
+            if (customerData?.cloudId) {
+              record.cloudId = customerData.cloudId;
+            }
+            record.userId = userId;
             record.isSynced = false;
             record.syncedAt = null;
-            // updatedAt and createdAt are readonly and auto-managed by WatermelonDB
-            record.idempotencyKey = `customer-${record.localId}-${Date.now()}`;
+            record.syncStatus = 'pending';
+            record.syncError = null;
+            record.lastSyncAttempt = null;
+            if (!record.localId) {
+              record.localId = generateUUID();
+            }
+            if (!record.idempotencyKey) {
+              record.idempotencyKey = `customer-${record.localId}`;
+            }
+            record._raw.updated_at = timestamp;
           });
+          await this.upsertSyncQueue(existingCustomer, baseQueuePayload, timestamp);
+          return existingCustomer;
         }
+
+        const localId = customerData?.localId || generateUUID();
+        const idempotencyKey = customerData?.idempotencyKey || `customer-${localId}-${timestamp}`;
+
+        const createdCustomer = await customersCollection.create(record => {
+          record.localId = localId;
+          record.cloudId = customerData?.cloudId || null;
+          record.userId = userId;
+          record.name = normalized.name;
+          record.phone = normalized.phone;
+          record.email = normalized.email;
+          record.address = normalized.address;
+          record.isSynced = false;
+          record.syncedAt = null;
+          record.syncStatus = 'pending';
+          record.syncError = null;
+          record.lastSyncAttempt = null;
+          record.idempotencyKey = idempotencyKey;
+          record._raw.created_at = timestamp;
+          record._raw.updated_at = timestamp;
+        });
+        await this.upsertSyncQueue(
+          createdCustomer,
+          {...baseQueuePayload, created_at: timestamp, idempotency_key: idempotencyKey},
+          timestamp,
+        );
+        return createdCustomer;
       });
 
-      // Clear search cache for this customer
       this.clearSearchCache();
 
-      return customer;
+      return upsertedCustomer;
     } catch (error) {
       console.error('Save customer error:', error);
       throw error;
+    }
+  }
+
+  normalizeCustomerFields(customerData = {}) {
+    const sanitize = value => {
+      const trimmed = (value ?? '').toString().trim();
+      return trimmed.length > 0 ? trimmed : null;
+    };
+    const name = sanitize(customerData.name);
+
+    return {
+      name: name || 'Customer',
+      phone: sanitize(customerData.phone),
+      email: sanitize(customerData.email),
+      address: sanitize(customerData.address),
+    };
+  }
+
+  formatCustomerRecord(customer, source = 'local') {
+    if (!customer) {
+      return null;
+    }
+
+    const candidates = [
+      customer.id,
+      customer._id,
+      customer.localId,
+      customer.local_id,
+      customer.cloudId,
+      customer.cloud_id,
+      customer.phone,
+      customer.email,
+    ].filter(Boolean);
+
+    const identifier = candidates.length > 0 ? candidates[0].toString() : `temp-${generateUUID()}`;
+
+    return {
+      id: identifier,
+      localId: (customer.localId || customer.local_id || null) ?? null,
+      cloudId: (customer.cloudId || customer.cloud_id || customer._id || null) ?? null,
+      userId: customer.userId || customer.user_id || null,
+      name: customer.name || '',
+      phone: customer.phone || '',
+      email: customer.email || '',
+      address: customer.address || '',
+      source,
+    };
+  }
+
+  buildCustomerKey(record) {
+    if (!record) {
+      return '';
+    }
+
+    return [
+      (record.phone || '').toLowerCase(),
+      (record.email || '').toLowerCase(),
+      (record.localId || '').toString().toLowerCase(),
+      (record.cloudId || '').toString().toLowerCase(),
+      (record.name || '').toLowerCase(),
+    ].join('|');
+  }
+
+  async findCustomerByColumn(column, value) {
+    if (!value) {
+      return null;
+    }
+
+    try {
+      const customersCollection = database.collections.get('customers');
+      const results = await customersCollection.query(Q.where(column, value)).fetch();
+      return results[0] || null;
+    } catch (error) {
+      console.error(`Find customer by ${column} error:`, error);
+      return null;
+    }
+  }
+
+  async upsertSyncQueue(customerRecord, payload, timestamp) {
+    try {
+      const queueCollection = database.collections.get('sync_queue');
+      if (!queueCollection) {
+        return;
+      }
+
+      const queueTimestamp = timestamp ?? Date.now();
+      const rawRecord = customerRecord?._raw || {};
+      const entityId = customerRecord.localId || rawRecord.local_id || customerRecord.id;
+      const serializedPayload = JSON.stringify({
+        ...payload,
+        local_id: customerRecord.localId || rawRecord.local_id,
+        cloud_id: customerRecord.cloudId || rawRecord.cloud_id || null,
+        idempotency_key: customerRecord.idempotencyKey || rawRecord.idempotency_key,
+        updated_at: payload?.updated_at ?? rawRecord.updated_at ?? queueTimestamp,
+        created_at: payload?.created_at ?? rawRecord.created_at ?? queueTimestamp,
+      });
+
+      const existingEntries = await queueCollection
+        .query(
+          Q.where('entity_type', 'customer'),
+          Q.where('entity_id', entityId),
+        )
+        .fetch();
+
+      if (existingEntries.length > 0) {
+        await existingEntries[0].update(entry => {
+          entry.operation = 'upsert';
+          entry.data = serializedPayload;
+          entry.retryCount = 0;
+          entry.lastError = null;
+          entry._raw.updated_at = queueTimestamp;
+        });
+      } else {
+        await queueCollection.create(entry => {
+          entry.entityType = 'customer';
+          entry.entityId = entityId;
+          entry.operation = 'upsert';
+          entry.data = serializedPayload;
+          entry.retryCount = 0;
+          entry.lastError = null;
+          entry._raw.created_at = queueTimestamp;
+          entry._raw.updated_at = queueTimestamp;
+        });
+      }
+    } catch (error) {
+      console.warn('Sync queue update failed for customer:', error);
     }
   }
 
@@ -308,7 +490,7 @@ class CustomerService {
 
       // Try name search if still not found
       if (!customer && name) {
-        const results = await this.searchCustomers(name, { limit: 1, includeCloud: false });
+        const results = await this.searchCustomers(name, { limit: 1, includeCloud: true });
         if (results.length > 0) {
           customer = results[0];
         }
@@ -318,7 +500,8 @@ class CustomerService {
         return {
           found: true,
           customer: {
-            localId: customer.localId,
+            localId: customer.localId || customer.local_id || null,
+            cloudId: customer.cloudId || customer.cloud_id || null,
             name: customer.name,
             phone: customer.phone,
             email: customer.email,
@@ -330,7 +513,7 @@ class CustomerService {
         // If no exact match, provide suggestions
         const suggestions = await this.searchCustomers(
           phone || email || name || '',
-          { limit: 5, includeCloud: false }
+          { limit: 5, includeCloud: true }
         );
 
         return {
@@ -338,6 +521,7 @@ class CustomerService {
           customer: null,
           suggestions: suggestions.map(suggestion => ({
             localId: suggestion.localId,
+            cloudId: suggestion.cloudId || null,
             name: suggestion.name,
             phone: suggestion.phone,
             email: suggestion.email,

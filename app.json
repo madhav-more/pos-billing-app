@@ -24,7 +24,9 @@
         "INTERNET",
         "ACCESS_NETWORK_STATE",
         "READ_EXTERNAL_STORAGE",
-        "WRITE_EXTERNAL_STORAGE"
+        "WRITE_EXTERNAL_STORAGE",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {
@@ -42,6 +44,9 @@
       "eas": {
         "projectId": "1b4440c1-9e2e-4e80-b477-997249ba72f4"
       }
+    },
+    "ios": {
+      "bundleIdentifier": "com.guru.pos"
     }
   }
 }

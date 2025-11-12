@@ -1,7 +1,7 @@
 import Item from '../models/Item.js';
 import Customer from '../models/Customer.js';
 import Transaction from '../models/Transaction.js';
-import { v4 as uuidv4 } from 'uuid';
+import { resolveCompanyCode } from '../utils/companyScope.js';
 
 export const pushChanges = async (req, res) => {
   const { items, customers, transactions, user_id } = req.body;
@@ -12,6 +12,11 @@ export const pushChanges = async (req, res) => {
   }
 
   try {
+    const companyCode = await resolveCompanyCode(req);
+    if (!companyCode) {
+      return res.status(403).json({ error: 'Company scope required' });
+    }
+
     const results = {
       items: { synced: [], conflicts: [] },
       customers: { synced: [], conflicts: [] },
@@ -24,49 +29,53 @@ export const pushChanges = async (req, res) => {
           if (item.idempotency_key) {
             const existingByIdempotency = await Item.findOne({
               idempotency_key: item.idempotency_key,
-              user_id: userId
+              company_code: companyCode
             });
 
             if (existingByIdempotency) {
               results.items.synced.push({
-                id: item.id,
-                id: existingByIdempotency._id,
-                cloud_id: existingByIdempotency._id.toString()
+                local_id: item.id,
+                cloud_id: existingByIdempotency._id.toString(),
               });
               continue;
             }
           }
 
           let existingItem = await Item.findOne({
-            id: item.id,
-            user_id: userId
+            _id: item.id,
+            company_code: companyCode
           });
 
+          const itemUpdatedAt = new Date(item.updated_at || item.updatedAt || Date.now());
+          const payload = { ...item };
+          delete payload.id;
+          delete payload._id;
+
           if (existingItem) {
-            if (new Date(item.updated_at) > existingItem.updatedAt) {
+            if (itemUpdatedAt > existingItem.updatedAt) {
               await Item.findByIdAndUpdate(existingItem._id, {
-                ...item,
+                ...payload,
                 user_id: userId,
-                updatedAt: new Date(item.updated_at)
+                company_code: companyCode,
+                updatedAt: itemUpdatedAt
               });
             }
             existingItem = await Item.findById(existingItem._id);
           } else {
             const newItem = new Item({
-              id: item.id,
-              cloud_id: item.cloud_id || uuidv4(),
-              ...item,
+              _id: item.id,
+              ...payload,
               user_id: userId,
-              updatedAt: new Date(item.updated_at || Date.now())
+              company_code: companyCode,
+              updatedAt: itemUpdatedAt
             });
             existingItem = await newItem.save();
           }
 
           results.items.synced.push({
-            id: item.id,
-            id: existingItem._id,
+            local_id: item.id,
             cloud_id: existingItem._id.toString(),
-            voucher_number: existingItem.voucher_number
+            voucher_number: existingItem.voucher_number,
           });
         } catch (itemError) {
           console.error('Item sync error:', itemError);
@@ -84,48 +93,52 @@ export const pushChanges = async (req, res) => {
           if (customer.idempotency_key) {
             const existingByIdempotency = await Customer.findOne({
               idempotency_key: customer.idempotency_key,
-              user_id: userId
+              company_code: companyCode
             });
 
             if (existingByIdempotency) {
               results.customers.synced.push({
-                id: customer.id,
-                id: existingByIdempotency._id,
-                cloud_id: existingByIdempotency._id.toString()
+                local_id: customer.id,
+                cloud_id: existingByIdempotency._id.toString(),
               });
               continue;
             }
           }
 
           let existingCustomer = await Customer.findOne({
-            id: customer.id,
-            user_id: userId
+            _id: customer.id,
+            company_code: companyCode
           });
 
+          const customerUpdatedAt = new Date(customer.updated_at || customer.updatedAt || Date.now());
+          const payload = { ...customer };
+          delete payload.id;
+          delete payload._id;
+
           if (existingCustomer) {
-            if (new Date(customer.updated_at) > existingCustomer.updatedAt) {
+            if (customerUpdatedAt > existingCustomer.updatedAt) {
               await Customer.findByIdAndUpdate(existingCustomer._id, {
-                ...customer,
+                ...payload,
                 user_id: userId,
-                updatedAt: new Date(customer.updated_at)
+                company_code: companyCode,
+                updatedAt: customerUpdatedAt
               });
             }
             existingCustomer = await Customer.findById(existingCustomer._id);
           } else {
             const newCustomer = new Customer({
-              id: customer.id,
-              cloud_id: customer.cloud_id || uuidv4(),
-              ...customer,
+              _id: customer.id,
+              ...payload,
               user_id: userId,
-              updatedAt: new Date(customer.updated_at || Date.now())
+              company_code: companyCode,
+              updatedAt: customerUpdatedAt
             });
             existingCustomer = await newCustomer.save();
           }
 
           results.customers.synced.push({
-            id: customer.id,
-            id: existingCustomer._id,
-            cloud_id: existingCustomer._id.toString()
+            local_id: customer.id,
+            cloud_id: existingCustomer._id.toString(),
           });
         } catch (customerError) {
           console.error('Customer sync error:', customerError);
@@ -143,50 +156,54 @@ export const pushChanges = async (req, res) => {
           if (transaction.idempotency_key) {
             const existingByIdempotency = await Transaction.findOne({
               idempotency_key: transaction.idempotency_key,
-              user_id: userId
+              company_code: companyCode
             });
 
             if (existingByIdempotency) {
               results.transactions.synced.push({
-                id: transaction.id,
-                id: existingByIdempotency._id,
+                local_id: transaction.id,
                 cloud_id: existingByIdempotency._id.toString(),
-                voucher_number: existingByIdempotency.voucher_number
+                voucher_number: existingByIdempotency.voucher_number,
               });
               continue;
             }
           }
 
           let existingTx = await Transaction.findOne({
-            id: transaction.id,
-            user_id: userId
+            _id: transaction.id,
+            company_code: companyCode
           });
 
+          const transactionUpdatedAt = new Date(transaction.updated_at || transaction.updatedAt || Date.now());
+          const payload = { ...transaction };
+          delete payload.id;
+          delete payload._id;
+
           if (existingTx) {
-            if (new Date(transaction.updated_at) > existingTx.updatedAt) {
+            if (transactionUpdatedAt > existingTx.updatedAt) {
               await Transaction.findByIdAndUpdate(existingTx._id, {
-                ...transaction,
+                ...payload,
                 user_id: userId,
-                updatedAt: new Date(transaction.updated_at)
+                company_code: companyCode,
+                updatedAt: transactionUpdatedAt
               });
             }
             existingTx = await Transaction.findById(existingTx._id);
           } else {
             const newTx = new Transaction({
-              id: transaction.id,
-              cloud_id: transaction.cloud_id || uuidv4(),
-              ...transaction,
+              _id: transaction.id,
+              ...payload,
               user_id: userId,
-              updatedAt: new Date(transaction.updated_at || Date.now())
+              company_code: companyCode,
+              updatedAt: transactionUpdatedAt
             });
             existingTx = await newTx.save();
           }
 
           results.transactions.synced.push({
-            id: transaction.id,
-            id: existingTx._id,
+            local_id: transaction.id,
             cloud_id: existingTx._id.toString(),
-            voucher_number: existingTx.voucher_number
+            voucher_number: existingTx.voucher_number,
           });
         } catch (txError) {
           console.error('Transaction sync error:', txError);
@@ -207,23 +224,27 @@ export const pushChanges = async (req, res) => {
 
 export const pullChanges = async (req, res) => {
   const { since } = req.body;
-  const userId = req.user.userId;
 
   try {
+    const companyCode = await resolveCompanyCode(req);
+    if (!companyCode) {
+      return res.status(403).json({ error: 'Company scope required' });
+    }
+
     const sinceDate = since ? new Date(since) : new Date(0);
 
     const items = await Item.find({
-      user_id: userId,
+      company_code: companyCode,
       updatedAt: { $gt: sinceDate }
     }).sort({ updatedAt: 1 });
 
     const customers = await Customer.find({
-      user_id: userId,
+      company_code: companyCode,
       updatedAt: { $gt: sinceDate }
     }).sort({ updatedAt: 1 });
 
     const transactions = await Transaction.find({
-      user_id: userId,
+      company_code: companyCode,
       updatedAt: { $gt: sinceDate }
     }).sort({ updatedAt: 1 });
 

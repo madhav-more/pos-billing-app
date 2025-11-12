@@ -4,6 +4,7 @@ import User from '../models/User.js';
 
 export const signup = async (req, res) => {
   const { name, email, password, company, location } = req.body;
+  const companyCodeInput = req.body.company_code || req.body.companyCode;
 
   if (!name || !email || !password) {
     return res.status(400).json({ error: 'Name, email, and password are required' });
@@ -15,11 +16,27 @@ export const signup = async (req, res) => {
       return res.status(409).json({ error: 'User with this email already exists' });
     }
 
+    const resolvedCompany = typeof company === 'string' && company.trim().length > 0 ? company.trim() : 'GURU Retail';
+    const resolvedCompanyCodeSource = companyCodeInput || resolvedCompany || email;
+    const resolvedCompanyCode = resolvedCompanyCodeSource
+      .toString()
+      .slice(0, 8)
+      .replace(/[^A-Za-z0-9]/g, '')
+      .toUpperCase()
+      || 'GUR';
+
     const password_hash = await bcrypt.hash(password, 10);
-    const user = await User.create({ name, email, password_hash, company, location });
+    const user = await User.create({
+      name,
+      email,
+      password_hash,
+      company: resolvedCompany,
+      location,
+      company_code: resolvedCompanyCode
+    });
 
     const token = jwt.sign(
-      { userId: user._id.toString(), email: user.email },
+      { userId: user._id.toString(), email: user.email, companyCode: user.company_code },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
     );
@@ -32,7 +49,7 @@ export const signup = async (req, res) => {
         email: user.email, 
         company: user.company, 
         location: user.location,
-        company_code: user.company?.substring(0, 3).toUpperCase() || 'GUR' // Default company code
+        company_code: user.company_code
       }
     });
   } catch (error) {
@@ -60,7 +77,7 @@ export const login = async (req, res) => {
     }
 
     const token = jwt.sign(
-      { userId: user._id.toString(), email: user.email },
+      { userId: user._id.toString(), email: user.email, companyCode: user.company_code },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
     );
@@ -73,7 +90,7 @@ export const login = async (req, res) => {
         email: user.email, 
         company: user.company, 
         location: user.location,
-        company_code: user.company?.substring(0, 3).toUpperCase() || 'GUR' // Default company code
+        company_code: user.company_code
       }
     });
   } catch (error) {
@@ -98,7 +115,7 @@ export const validateToken = async (req, res) => {
         email: user.email,
         company: user.company,
         location: user.location,
-        company_code: user.company?.substring(0, 3).toUpperCase() || 'GUR'
+        company_code: user.company_code
       }
     });
   } catch (error) {
@@ -115,7 +132,7 @@ export const refreshToken = async (req, res) => {
     }
 
     const newToken = jwt.sign(
-      { userId: user._id.toString(), email: user.email },
+      { userId: user._id.toString(), email: user.email, companyCode: user.company_code },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
     );
@@ -128,7 +145,7 @@ export const refreshToken = async (req, res) => {
         email: user.email,
         company: user.company,
         location: user.location,
-        company_code: user.company?.substring(0, 3).toUpperCase() || 'GUR'
+        company_code: user.company_code
       }
     });
   } catch (error) {

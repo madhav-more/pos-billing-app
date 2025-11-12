@@ -7,7 +7,8 @@
     "start": "expo start",
     "android": "expo run:android",
     "build:apk": "eas build --platform android --profile production",
-    "clean": "rm -rf node_modules package-lock.json android ios .expo && npm install"
+    "clean": "rm -rf node_modules package-lock.json android ios .expo && npm install",
+    "ios": "expo run:ios"
   },
   "dependencies": {
     "@expo/vector-icons": "^14.0.0",

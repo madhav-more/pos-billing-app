@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "32b9f659-d541-42cb-b685-4eeadcfd82cc"
+      }
+    },
+    "android": {
+      "package": "com.raghavsakamoto123.guruposbackend"
+    }
+  }
+}
